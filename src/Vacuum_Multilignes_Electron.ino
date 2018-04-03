@@ -14,7 +14,7 @@
  */
 
 //Dev name      No de lignes
-// VA1-4     4  Lignes A1 à A4
+// VA1-4     4  Lignes A1 à A4 RSSI = -77, qual 37
 // VA5B1-2   3  Lignes A5, B1 et B2
 // VC1-3     3  Lignes C1 à C3
 // VC4-6     3  Lignes C4 à C6
@@ -26,7 +26,7 @@
 // VE10-12   3  Lignes E10 à E12
 // VF1-3     3  Lignes F1 à F3
 // VF4-6     3  Lignes F4 à F6
-// VF7-9     3  Lignes F7 à F9
+// VF7-9     3  Lignes F7 à F9 RSSI = -81, qual 37
 // VF10-12   3  Lignes F10 à F12
 // VF13-16   4  Lignes F13 à F16
 // VG1-2-H14 3  Lignes G1, G2 et H14
@@ -36,7 +36,7 @@
 // VH2-4     3  Lignes H2 à H4
 // VH5-7     3  Lignes H5 à H7
 // VH8-10    3  Lignes H8 à H10
-// VH11-13   3  Lignes H11 à H13
+// VH11-13   3  Lignes H11 à H13 RSSI = -91, qual 19
 
 #include "Particle.h"
 #include "math.h"
@@ -44,15 +44,17 @@
 // #include "ClosedCube_Si7051.h"
 
 SYSTEM_MODE(SEMI_AUTOMATIC);
+SYSTEM_THREAD(ENABLED);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.6.1";             // Version of this firmware.
+String FirmwareVersion = "0.6.6";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
 String FirmwareDate = F_Date + " " + F_Time;  //compilation date and time (UTC)
-String myEventName = "Dev1_Vacuum/Lignes";    // Name of the event to be sent to the cloud
+// String myEventName = "Dev1_Vacuum/Lignes";    // Name of the event to be sent to the cloud
+String myEventName = "test1_Vacuum/Lignes";    // Name of the event to be sent to the cloud
 
 #define SLEEPTIMEinMINUTES 5                  // Wake every SLEEPTIMEinMINUTES and check if there a reason to publish
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
@@ -62,7 +64,7 @@ String myEventName = "Dev1_Vacuum/Lignes";    // Name of the event to be sent to
 #define VacuumPublishLimits 1                 // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
 #define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
 #define BLUE_LED  D7                          // Blue led awake activity indicator
-#define minBatteryLevel 25                    // Sleep unless battery is above this level
+#define minBatteryLevel 20                    // Sleep unless battery is above this level
 
 // wakeupPin definition
 #define wakeupPin  D2
@@ -126,7 +128,7 @@ FuelGauge fuel;
 
 /* Define a log handler on Serial1 for log messages */
 Serial1LogHandler log1Handler(115200, LOG_LEVEL_WARN, {   // Logging level for non-application messages
-        { "app", LOG_LEVEL_ALL }                      // Logging level for application messages
+        { "app", LOG_LEVEL_INFO }                      // Logging level for application messages
 });
 
 // ***************************************************************
@@ -144,18 +146,20 @@ void setup() {
     RGB.mirrorTo(B1, B0, B2, true);
     // pinMode(D5, INPUT);   // Only required for old PCB design
     // si7051.begin(0x40); // default I2C address is 0x40
-    // PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
-    // pmic.setChargeVoltage(4112);                   // Set charge to more than 80%
+    PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
+    pmic.setChargeVoltage(4112);                   // Set charge to more than 80%
+    pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
     // pmic.setInputVoltageLimit(4840); //Set the lowest input voltage to 4.84 volts. This keeps my 5v solar panel from operating below 4.84 volts.
     thermistor = new Thermistor(thermistorInputPin, SERIESRESISTOR, 4095, THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, NUMSAMPLES, SAMPLEsINTERVAL);
     delay(2000UL);
     float soc = fuel.getSoC();
-    Log.info("(setup) Boot battery level %0.1f" , soc);
+    Log.info("\n(setup) Boot battery level %0.1f" , soc);
     if(soc > minBatteryLevel){
+      Log.info("(setup) Connecting to tower and cloud.");
       Particle.connect();
       if(waitFor(Particle.connected, 30000UL)){
         if (Particle.connected){
-          Log.info("(setup) Cloud connected!" + Time.timeStr());
+          Log.info("(setup) Cloud connected! - " + Time.timeStr());
           newGenTimestamp = Time.now();
           if (newGenTimestamp == 0 || Time.year() < 2018) {  // Make sure the time is valid
             Particle.syncTime();
@@ -163,12 +167,17 @@ void setup() {
             Log.info("(setup) syncTimeDone " + Time.timeStr());
           }
           Log.info("(setup) Setup Completed");
+        } else {
+          Log.warn("(setup) Failed to connect! Try again in 5 miutes");
+          restartCount++;
+          Log.warn("(setup) SETUP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
+          System.sleep(SLEEP_MODE_DEEP, 300);
         }
       }
     } else {
     // Sleep again for 1 hour to recharge the battery.
     restartCount++;
-    Log.warn("(setup) SETUP Restart. Count: %d, battery: %d", restartCount, fuel.getSoC());
+    Log.warn("(setup) SETUP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
     System.sleep(SLEEP_MODE_DEEP, 3600);
   }
 }
@@ -181,12 +190,12 @@ void loop() {
   tempDegreeC = readThermistor(NUMSAMPLES, 1);              // First check the temperature
   // Do not publish if its too cold or charge is lower than 20%
   float soc = fuel.getSoC();
+  Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() , soc);
   if(soc > minBatteryLevel){
     if (tempDegreeC >= (float)minPublishTemp) {
       vacChanged = readVacuums();                                          // Then VacuumPublishLimits
       if (wakeCount == 3 || vacChanged){
         lightIntensityLux = readLightIntensitySensor();         // Then read light intensity
-        Log.trace("(loop) Vin: %.3f", readVin());                      // And Vin value
         if (minActVac <= VacuumPublishLimits) {
           publishData();                         // Publish a message indicating battery status
         } else {
@@ -199,20 +208,21 @@ void loop() {
   } else {
     // else DEEP SLEEP the Electron for an hours
     restartCount++;
-    Log.warn("(loop) LOOP Restart. Count: %d, battery: %d", restartCount, fuel.getSoC());
+    Log.warn("(loop) LOOP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
     System.sleep(SLEEP_MODE_DEEP, 3600);  //Put the Electron into Deep Sleep for 1 Hour.
   }
-  Log.info("(loop) Going to sleep at: %d\n", millis());
+  Log.info("(loop) Going to sleep at: %lu\n", millis());
   // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
   // wake at next time boundary + TimeBoundaryOffset seconds
+  RGB.mirrorDisable();
   uint32_t dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
   System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
   w_time = millis();
+  RGB.mirrorTo(B1, B0, B2, true);
   Particle.process();
-  // Log.trace("(loop) " + Time.timeStr());
   wakeCount++;
   if (wakeCount > 3) {wakeCount = 0;}
-  Log.info("(loop) Wake up at: %d, WakeCount= %d", w_time, wakeCount);             // Log wakup time
+  Log.info("(loop) Wake up on: " + Time.timeStr() + ", WakeCount= %d", wakeCount);             // Log wakup time
 }
 
 // ***************************************************************
@@ -228,7 +238,7 @@ bool publishData() {
   }
   bool pubSuccess = Particle.publish(myEventName,
         makeJSON(noSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3],
-                  tempDegreeC, lightIntensityLux, fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality),
+                  tempDegreeC, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality),
         PRIVATE, NO_ACK);
   for(int i=0; i<300; i++) { // Gives 3 seconds to send the data
     Particle.process();
@@ -236,13 +246,12 @@ bool publishData() {
   }
   if (pubSuccess){
     Log.info("(publishData) Published success!");
-    Log.info("(publishData) Incrementing noSerie now");
+    // Log.info("(publishData) Incrementing noSerie now");
     noSerie++;
   } else {
     FailCount++;
     Log.warn("(publishData) Published fail! Count: %d :(", FailCount);
-    delay(1000);
-    System.reset();
+    delay(500);
   }
   return pubSuccess;
 }
@@ -370,11 +379,11 @@ float AverageReadings (int anInputPinNo, int NSamples, int interval) {
 // ***************************************************************
 // Formattage standard pour les données sous forme JSON
 // ***************************************************************
-String makeJSON(uint32_t numSerie, uint32_t timeStamp, float va, float vb, float vc, float vd, float temp, float li, float soc, float volt, int RSSI, int signalQual){
+String makeJSON(uint32_t numSerie, uint32_t timeStamp, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, int RSSI, int signalQual){
   char publishString[200];
-  sprintf(publishString,"{\"noSerie\": %lu,\"generation\": %lu,\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"soc\":%.1f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d}",
-          numSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], tempDegreeC, lightIntensityLux, soc, volt, RSSI, signalQual);
-  Log.info("(makeJSON) : %s", publishString);
+  sprintf(publishString,"{\"noSerie\": %lu,\"generation\": %lu,\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.2f,\"soc\":%.1f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d}",
+          numSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], tempDegreeC, lightIntensityLux, Vin, soc, volt, RSSI, signalQual);
+  Log.info("(makeJSON) %s", publishString);
   return publishString;
 }
 
@@ -413,14 +422,21 @@ void syncCloudTime(){
   if (Time.day() != lastDay || Time.year() < 2018) { // a new day calls for a sync
     Log.info("(syncCloudTime) Sync time");
     if(waitFor(Particle.connected, 1 * 60000UL)) {
-      Particle.syncTime();
-      start = millis();
-      while (millis() - start < 1000UL) {
-              delay (10);
-              Particle.process(); // Wait a second to received the time.
+      if (Particle.connected){
+        Particle.syncTime();
+        start = millis();
+        while (millis() - start < 1000UL) {
+                delay (10);
+                Particle.process(); // Wait a second to received the time.
+        }
+        lastDay = Time.day();
+        Log.info("(syncCloudTime) Sync time completed");
+      } else {
+        Log.warn("(syncCloudTime) Failed to connect! Try again in 5 miutes");
+        restartCount++;
+        Log.warn("(syncCloudTime) SETUP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
+        System.sleep(SLEEP_MODE_DEEP, 300);
       }
-      lastDay = Time.day();
-      Log.info("(syncCloudTime) Sync time completed");
     }
   }
   // RGB.mirrorDisable();
