@@ -44,11 +44,11 @@
 // #include "ClosedCube_Si7051.h"
 
 SYSTEM_MODE(SEMI_AUTOMATIC);
-SYSTEM_THREAD(ENABLED);
+// SYSTEM_THREAD(ENABLED);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.6.6";             // Version of this firmware.
+String FirmwareVersion = "0.6.9";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -65,6 +65,7 @@ String myEventName = "test1_Vacuum/Lignes";    // Name of the event to be sent t
 #define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
 #define BLUE_LED  D7                          // Blue led awake activity indicator
 #define minBatteryLevel 20                    // Sleep unless battery is above this level
+#define maxConnectTime 60                     // Maximum allowable time for connection to the Cloud
 
 // wakeupPin definition
 #define wakeupPin  D2
@@ -79,7 +80,7 @@ Thermistor *thermistor;
 int thermistorPowerPin = D1;
 int thermistorInputPin = A4;
 float tempDegreeC = 0;
-int minPublishTemp = -10;                      // Do not publish below -5
+int minPublishTemp = -10;                      // Do not publish below -10
 
 // Light sensor parameters and variable definitions
 #define LOADRESISTOR 51000UL                  // Resistor used to convert current to voltage on the light sensor
@@ -99,7 +100,7 @@ float lightIntensityLux = 0;
 #define NVac 4                                // Number of vacuum sensors
 int vacuum5VoltsEnablePin = D6;               // Vacuums sensors operate at 5V
 int VacuumPins[] = {A0, A1, A2, A3};
-float minActVac = 100;
+float minActualVacuum = 100;
 static float VacuumInHg[] = {0, 0, 0, 0};         // Vacuum scaled data array
 static float PrevVacuumInHg[] = {10, 0, 0, 0};     // Vacuum reading at the preceding iteration
 
@@ -147,18 +148,20 @@ void setup() {
     // pinMode(D5, INPUT);   // Only required for old PCB design
     // si7051.begin(0x40); // default I2C address is 0x40
     PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
-    pmic.setChargeVoltage(4112);                   // Set charge to more than 80%
-    pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
+    // pmic.setChargeVoltage(4112);                   // Set charge to more than 80%
+    // pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
     // pmic.setInputVoltageLimit(4840); //Set the lowest input voltage to 4.84 volts. This keeps my 5v solar panel from operating below 4.84 volts.
     thermistor = new Thermistor(thermistorInputPin, SERIESRESISTOR, 4095, THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, NUMSAMPLES, SAMPLEsINTERVAL);
     delay(2000UL);
     float soc = fuel.getSoC();
+    tempDegreeC = readThermistor(NUMSAMPLES, 1);              // First check the temperature
     Log.info("\n(setup) Boot battery level %0.1f" , soc);
-    if(soc > minBatteryLevel){
+    if(soc > minBatteryLevel || tempDegreeC >= (float)minPublishTemp){
       Log.info("(setup) Connecting to tower and cloud.");
       Particle.connect();
-      if(waitFor(Particle.connected, 30000UL)){
-        if (Particle.connected){
+      if(waitFor(Particle.connected, maxConnectTime * 1000UL)){
+        Particle.process();
+        if (Particle.connected()){
           Log.info("(setup) Cloud connected! - " + Time.timeStr());
           newGenTimestamp = Time.now();
           if (newGenTimestamp == 0 || Time.year() < 2018) {  // Make sure the time is valid
@@ -171,14 +174,16 @@ void setup() {
           Log.warn("(setup) Failed to connect! Try again in 5 miutes");
           restartCount++;
           Log.warn("(setup) SETUP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
-          System.sleep(SLEEP_MODE_DEEP, 300);
+          System.sleep(SLEEP_MODE_DEEP, 300UL);
         }
       }
     } else {
     // Sleep again for 1 hour to recharge the battery.
     restartCount++;
     Log.warn("(setup) SETUP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
-    System.sleep(SLEEP_MODE_DEEP, 3600);
+    delay(2000UL);
+    // System.sleep(SLEEP_MODE_DEEP, 3600);
+    System.sleep(wakeupPin, FALLING, 3600); // Check again in 1 hour if publish conditions are OK
   }
 }
 
@@ -191,12 +196,12 @@ void loop() {
   // Do not publish if its too cold or charge is lower than 20%
   float soc = fuel.getSoC();
   Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() , soc);
-  if(soc > minBatteryLevel){
+  if(soc > minBatteryLevel || tempDegreeC >= (float)minPublishTemp){
     if (tempDegreeC >= (float)minPublishTemp) {
       vacChanged = readVacuums();                                          // Then VacuumPublishLimits
+      lightIntensityLux = readLightIntensitySensor();         // Then read light intensity
       if (wakeCount == 3 || vacChanged){
-        lightIntensityLux = readLightIntensitySensor();         // Then read light intensity
-        if (minActVac <= VacuumPublishLimits) {
+        if (minActualVacuum <= VacuumPublishLimits) {
           publishData();                         // Publish a message indicating battery status
         } else {
           Log.trace("(loop) No vacuum, nothing to publish!");
@@ -209,19 +214,27 @@ void loop() {
     // else DEEP SLEEP the Electron for an hours
     restartCount++;
     Log.warn("(loop) LOOP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
-    System.sleep(SLEEP_MODE_DEEP, 3600);  //Put the Electron into Deep Sleep for 1 Hour.
+    for(int n=0;n<50;n++){
+      delay(200UL);
+    }
+      // System.sleep(SLEEP_MODE_DEEP, 3600);  //Put the Electron into Deep Sleep for 1 Hour.
+    System.sleep(wakeupPin, FALLING, 3600); // Check again in 1 hour if publish conditions are OK
   }
   Log.info("(loop) Going to sleep at: %lu\n", millis());
   // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
   // wake at next time boundary + TimeBoundaryOffset seconds
   RGB.mirrorDisable();
+  Particle.process();
   uint32_t dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
   System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+  Particle.process();
   w_time = millis();
   RGB.mirrorTo(B1, B0, B2, true);
   Particle.process();
   wakeCount++;
-  if (wakeCount > 3) {wakeCount = 0;}
+  if (wakeCount > 3) {
+    wakeCount = 0;
+  }
   Log.info("(loop) Wake up on: " + Time.timeStr() + ", WakeCount= %d", wakeCount);             // Log wakup time
 }
 
@@ -278,22 +291,22 @@ float readThermistor(int NSamples, int interval){
 // Read and average vacuum readings
 // ***************************************************************
 bool readVacuums(){
-  float VacuumRawData[] = {0, 0, 0, 0};                               // Vacuum raw data array
-  digitalWrite(vacuum5VoltsEnablePin, true);                          // Turn ON the vacuum trasnducer
-  minActVac = 100;                                                    // Reset min to a high value initially
-  delay(25UL);                                                        // Wait 25 ms for the vacuum sensors to stabilize
+  float VacuumRawData[] = {0, 0, 0, 0};                                     // Vacuum raw data array
+  digitalWrite(vacuum5VoltsEnablePin, true);                                // Turn ON the vacuum trasnducer
+  minActualVacuum = 100;                                                    // Reset min to a high value initially
+  delay(25UL);                                                              // Wait 25 ms for the vacuum sensors to stabilize
   /* Read and log the vacuum values for the four (4) sensors */
   for (int i = 0; i < NVac; i++) {
     Particle.process();
     VacuumRawData[i] = AverageReadings(VacuumPins[i], NUMSAMPLES, SAMPLEsINTERVAL); // Average multiple raw readings to reduce noise
     Log.trace("(readVacuums) Vacuum_%d_raw = %.0f", i, VacuumRawData[i]);           // Log raw data at trace level for debugging
     VacuumInHg[i] = VacRaw2inHg(VacuumRawData[i]);
-    if (VacuumInHg[i] < -30) {VacuumInHg[i] = 0; };                   // Convert to inHg
+    if (VacuumInHg[i] < -30) {VacuumInHg[i] = 0; };                                 // Convert to inHg
     Log.info("(readVacuums) Vacuum_%d = %.1f inHg", i, VacuumInHg[i]);              // Log final value at info level
-    minActVac = min(minActVac, VacuumInHg[i]);                        // Find the minimum readings of all sensors
+    minActualVacuum = min(minActualVacuum, VacuumInHg[i]);                          // Find the minimum readings of all sensors
   }
-  Log.info("(readVacuums) Min Vacuum readings %.1f inHg", minActVac);               // Log final value at info level
-  digitalWrite(vacuum5VoltsEnablePin, false);                         // Turn OFF the pressure transducers
+  Log.info("(readVacuums) Min Vacuum readings %.1f inHg", minActualVacuum);         // Log final value at info level
+  digitalWrite(vacuum5VoltsEnablePin, false);                                       // Turn OFF the pressure transducers
   // Check if there was a significant change in the vacuum readings
   bool vacChanged = false;
   for (int i = 0; i < NVac; i++){
@@ -303,7 +316,7 @@ bool readVacuums(){
      }
   }
   for (int i = 0; i < NVac; i++){
-    PrevVacuumInHg[i] = VacuumInHg[i];                                // Remember previous readings
+    PrevVacuumInHg[i] = VacuumInHg[i];                                      // Remember previous vacuum readings
   }
   return vacChanged;
 }
@@ -421,8 +434,8 @@ void checkSignal() {
 void syncCloudTime(){
   if (Time.day() != lastDay || Time.year() < 2018) { // a new day calls for a sync
     Log.info("(syncCloudTime) Sync time");
-    if(waitFor(Particle.connected, 1 * 60000UL)) {
-      if (Particle.connected){
+    if(waitFor(Particle.connected, maxConnectTime * 1000UL)) {
+      if (Particle.connected()){
         Particle.syncTime();
         start = millis();
         while (millis() - start < 1000UL) {
