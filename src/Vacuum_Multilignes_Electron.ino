@@ -48,7 +48,7 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.6.9";             // Version of this firmware.
+String FirmwareVersion = "0.7.0";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -156,7 +156,7 @@ void setup() {
     float soc = fuel.getSoC();
     tempDegreeC = readThermistor(NUMSAMPLES, 1);              // First check the temperature
     Log.info("\n(setup) Boot battery level %0.1f" , soc);
-    if(soc > minBatteryLevel || tempDegreeC >= (float)minPublishTemp){
+    if(soc > minBatteryLevel && tempDegreeC >= (float)minPublishTemp){
       Log.info("(setup) Connecting to tower and cloud.");
       Particle.connect();
       if(waitFor(Particle.connected, maxConnectTime * 1000UL)){
@@ -196,7 +196,7 @@ void loop() {
   // Do not publish if its too cold or charge is lower than 20%
   float soc = fuel.getSoC();
   Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() , soc);
-  if(soc > minBatteryLevel || tempDegreeC >= (float)minPublishTemp){
+  if(soc > minBatteryLevel && tempDegreeC >= (float)minPublishTemp){
     if (tempDegreeC >= (float)minPublishTemp) {
       vacChanged = readVacuums();                                          // Then VacuumPublishLimits
       lightIntensityLux = readLightIntensitySensor();         // Then read light intensity
