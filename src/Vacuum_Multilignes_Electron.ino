@@ -1,17 +1,19 @@
 /*
- * Project Vacuum_Multilignes_Electron
- * Description: Code running on an Electron on the "Capteur de vide multilignes"
- * Author: Pierre Leboeuf
- * Date: 29 mars 2018
- */
+* Project Vacuum_Multilignes_Electron
+* Description: Code running on an Electron on the "Capteur de vide multilignes"
+* Author: Pierre Leboeuf
+* Date: 30 oct 2018
+*/
 
 /*
- *** Notes about sleep ***
-   Sleep mode: Stop mode + SLEEP_NETWORK_STANDBY, use SETUP BUTTON (20) to wake
-   Publish: NO_ACK
-   Delay loop: 500 ms for publish and print
-   Sleep duration: See #define SLEEPTIMEinMINUTES
- */
+*** Notes about sleep ***
+Sleep mode: Stop mode + SLEEP_NETWORK_STANDBY, use SETUP BUTTON (20) to wake-up
+Publish: NO_ACK
+Delay loop: 500 ms for publish and print
+Sleep duration: See #define SLEEPTIMEinMINUTES
+*/
+// *** Commande pour tracer sur le Raspberry pi
+//screen -S DEV1 -L dev1_auto_inside_080rc11 /dev/ttyUSB0 115200
 
 //Dev name      No de lignes
 // VA1-4     4  Lignes A1 à A4 RSSI = -77, qual 37
@@ -38,34 +40,49 @@
 // VH8-10    3  Lignes H8 à H10
 // VH11-13   3  Lignes H11 à H13 RSSI = -91, qual 19
 
+// Date de changement d'heure au Québec: 2ième dimanche de mars (10 mars 2019) +1h.
+// Premier dimanche de novembre (3 novembre 2019) -1h.
+
 #include "Particle.h"
 #include "math.h"
 #include "photon-thermistor.h"
+// #include <unordered_map>
 // #include "ClosedCube_Si7051.h"
 
-SYSTEM_MODE(SEMI_AUTOMATIC);
+SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.7.0";             // Version of this firmware.
+String FirmwareVersion = "0.7.39";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
 String FirmwareDate = F_Date + " " + F_Time;  //compilation date and time (UTC)
-// String myEventName = "Dev1_Vacuum/Lignes";    // Name of the event to be sent to the cloud
 String myEventName = "test1_Vacuum/Lignes";    // Name of the event to be sent to the cloud
+String myNameIs = "";
 
-#define SLEEPTIMEinMINUTES 5                  // Wake every SLEEPTIMEinMINUTES and check if there a reason to publish
+#define SLEEPTIMEinMINUTES 5                  // wake-up every SLEEPTIMEinMINUTES and check if there a reason to publish
+#define ONEHOURinSECONDS 3600UL
+#define MINUTES 60UL                          //
+#define WakeCountToPublish 3                  // Number of wake-up before publishing
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
-#define TimeBoundaryOffset 0                  // Wake at time boundary plus some seconds
+#define NIGHT_SLEEP_START_TIME 21             // Sleep for the night beginning at 19h00
+#define NIGHT_SLEEP_DURATION_HR 10            // Night sleep duration in hours
+#define TimeBoundaryOffset 1                  // wake-up at time boundary plus some seconds
+#define WatchDogTimeout 480000UL              // Watch Dog Timeaout delay
+
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
 #define SAMPLEsINTERVAL 10UL                  // Interval of time between samples in ms
 #define VacuumPublishLimits 1                 // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
 #define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
+
 #define BLUE_LED  D7                          // Blue led awake activity indicator
-#define minBatteryLevel 20                    // Sleep unless battery is above this level
-#define maxConnectTime 60                     // Maximum allowable time for connection to the Cloud
+#define minBatteryLevel 30                    // Sleep unless battery is above this level
+#define maxConnectTime 900                     // Maximum allowable time for connection to the Cloud
+#define SLEEP_NORMAL 0
+#define SLEEP_LOW_BATTERY 1
+#define SLEEP_FIVE_MINUTES 2
 
 // wakeupPin definition
 #define wakeupPin  D2
@@ -80,7 +97,8 @@ Thermistor *thermistor;
 int thermistorPowerPin = D1;
 int thermistorInputPin = A4;
 float tempDegreeC = 0;
-int minPublishTemp = -10;                      // Do not publish below -10
+float minPublishTemp = -10;                   // Do not publish below -10
+String myID;                                  // Device Id
 
 // Light sensor parameters and variable definitions
 #define LOADRESISTOR 51000UL                  // Resistor used to convert current to voltage on the light sensor
@@ -111,346 +129,462 @@ int txPrec   = 0;                             // Previous tx data count
 int rxPrec   = 0;                             // Previous rx data count
 int deltaTx  = 0;                             // Difference tx data count
 int deltaRx  = 0;                             // Difference rx data count
-uint32_t startTime = 0;
-uint32_t start    = 0;
-uint32_t w_time   = 0;                        // Wakeup time in ms
-uint32_t aw_time  = 0;                        // Awake time in sec
-retained int lastDay     = 0;
+int startTime = 0;
+int start    = 0;
+int w_time   = 0;                        // Wakeup time in ms
+int aw_time  = 0;                        // Awake time in sec
+retained int lastDay = 0;
+// int lastDay = 0;
 
 unsigned long lastSync = millis();
 char publishStr[120];
-retained uint32_t noSerie;                             // Le numéro de série est généré automatiquement
+retained int noSerie;                             // Le numéro de série est généré automatiquement
+// int noSerie;                             // Le numéro de série est généré automatiquement
 retained time_t newGenTimestamp = 0;
-retained uint32_t restartCount = 0;
+// time_t newGenTimestamp = 0;
+retained int restartCount = 0;
+// int restartCount = 0;
 int wakeCount = 0;
 retained int FailCount = 0;
+// int FailCount = 0;
 FuelGauge fuel;
+float soc = 0;
+float Vbat = 0;
+
 // ClosedCube_Si7051 si7051;
 
 /* Define a log handler on Serial1 for log messages */
-Serial1LogHandler log1Handler(115200, LOG_LEVEL_WARN, {   // Logging level for non-application messages
-        { "app", LOG_LEVEL_INFO }                      // Logging level for application messages
+Serial1LogHandler log1Handler(115200, LOG_LEVEL_TRACE, {   // Logging level for non-application messages
+    { "app", LOG_LEVEL_INFO }                      // Logging level for application messages
 });
 
 // ***************************************************************
 // Setup
 // ***************************************************************
 void setup() {
-  Log.info("(setup) Firmware " + FirmwareVersion);
-  Log.info("(setup) Firmware date: " + FirmwareDate);
-  Time.zone(-4);
+    Log.info("\n\n__________BOOTING_________________");
+    Log.info("(setup) Boot on: " + Time.timeStr());
+    Log.info("(setup) Firmware: " + FirmwareVersion);
+    Log.info("(setup) System version: " + System.version());
+    Log.info("(setup) Firmware date: " + FirmwareDate);
+    Time.zone(-5);
     pinMode(vacuum5VoltsEnablePin, OUTPUT);        // Put all control pins in output mode
     pinMode(lightSensorPowerPin, OUTPUT);
     pinMode(thermistorPowerPin, OUTPUT);
     pinMode(BLUE_LED, OUTPUT);
     pinMode(wakeupPin, INPUT_PULLUP);
-    RGB.mirrorTo(B1, B0, B2, true);
+    RGB.mirrorTo(B1, B0, B2, true); // Mirror LED on external LED
     // pinMode(D5, INPUT);   // Only required for old PCB design
     // si7051.begin(0x40); // default I2C address is 0x40
     PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
-    // pmic.setChargeVoltage(4112);                   // Set charge to more than 80%
-    // pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
-    // pmic.setInputVoltageLimit(4840); //Set the lowest input voltage to 4.84 volts. This keeps my 5v solar panel from operating below 4.84 volts.
+    pmic.setChargeVoltage(4112);                   // Set charge voltage to standard 100%
+    pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
+    // pmic.setInputVoltageLimit(4840); //Set the lowest input voltage to 4.84 volts. This keeps my 6v solar panel from operating below 4.84 volts.
     thermistor = new Thermistor(thermistorInputPin, SERIESRESISTOR, 4095, THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, NUMSAMPLES, SAMPLEsINTERVAL);
-    delay(2000UL);
-    float soc = fuel.getSoC();
+    soc = fuel.getSoC();
+    Vbat = fuel.getVCell();
+    delay(5000UL);
+    myID = System.deviceID();
+    getDeviceEventName(myID);
+    soc = fuel.getSoC();
+    Vbat = fuel.getVCell();
     tempDegreeC = readThermistor(NUMSAMPLES, 1);              // First check the temperature
-    Log.info("\n(setup) Boot battery level %0.1f" , soc);
-    if(soc > minBatteryLevel && tempDegreeC >= (float)minPublishTemp){
-      Log.info("(setup) Connecting to tower and cloud.");
-      Particle.connect();
-      if(waitFor(Particle.connected, maxConnectTime * 1000UL)){
-        Particle.process();
-        if (Particle.connected()){
-          Log.info("(setup) Cloud connected! - " + Time.timeStr());
-          newGenTimestamp = Time.now();
-          if (newGenTimestamp == 0 || Time.year() < 2018) {  // Make sure the time is valid
-            Particle.syncTime();
-            waitUntil(Particle.syncTimeDone);
-            Log.info("(setup) syncTimeDone " + Time.timeStr());
-          }
-          Log.info("(setup) Setup Completed");
-        } else {
-          Log.warn("(setup) Failed to connect! Try again in 5 miutes");
-          restartCount++;
-          Log.warn("(setup) SETUP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
-          System.sleep(SLEEP_MODE_DEEP, 300UL);
+    Log.info("\n(setup) Boot battery voltage: %0.3f, charge level: %0.2f" , Vbat, soc);
+    if(soc > minBatteryLevel && tempDegreeC >= minPublishTemp){
+        Log.info("(setup) Connecting to tower and cloud.");
+        Particle.connect();
+        if(waitFor(Particle.connected, maxConnectTime * 1000UL)){
+            Particle.process();
+            if (Particle.connected()){
+                Log.info("(setup) Cloud connected! - " + Time.timeStr());
+                while (Time.year() < 2018 || Time.year() > 2050) // Make sure the time is valid
+                {
+                    Log.info("(setup) Syncing time ");
+                    Particle.syncTime();
+                    waitUntil(Particle.syncTimeDone);
+                    Log.info("(setup) syncTimeDone " + Time.timeStr());
+                }
+                newGenTimestamp = Time.now();
+                Log.info("(setup) Setup Completed");
+            } else {
+                Log.warn("(setup) Failed to connect! Try again in 5 miutes");
+                restartCount++;
+                Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f\%, Vbat: %.3f", restartCount, soc, Vbat);
+                goToSleep(SLEEP_FIVE_MINUTES);
+            }
         }
-      }
     } else {
-    // Sleep again for 1 hour to recharge the battery.
-    restartCount++;
-    Log.warn("(setup) SETUP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
-    delay(2000UL);
-    // System.sleep(SLEEP_MODE_DEEP, 3600);
-    System.sleep(wakeupPin, FALLING, 3600); // Check again in 1 hour if publish conditions are OK
-  }
+        // Sleep again for 1 hour to recharge the battery.
+        restartCount++;
+        Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f\%, Vbat: %.3f", restartCount, soc, Vbat);
+        delay(2000UL);
+        goToSleep(SLEEP_LOW_BATTERY);
+    }
 }
 
 // ***************************************************************
 // Main loop
 // ***************************************************************
 void loop() {
-  bool vacChanged;
-  tempDegreeC = readThermistor(NUMSAMPLES, 1);              // First check the temperature
-  // Do not publish if its too cold or charge is lower than 20%
-  float soc = fuel.getSoC();
-  Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() , soc);
-  if(soc > minBatteryLevel && tempDegreeC >= (float)minPublishTemp){
-    if (tempDegreeC >= (float)minPublishTemp) {
-      vacChanged = readVacuums();                                          // Then VacuumPublishLimits
-      lightIntensityLux = readLightIntensitySensor();         // Then read light intensity
-      if (wakeCount == 3 || vacChanged){
-        if (minActualVacuum <= VacuumPublishLimits) {
-          publishData();                         // Publish a message indicating battery status
-        } else {
-          Log.trace("(loop) No vacuum, nothing to publish!");
+    bool vacChanged = false;
+    tempDegreeC = readThermistor(NUMSAMPLES, 1);                      // First check the temperature
+    // Do not publish if its too cold or charge is lower than 20%
+    soc = fuel.getSoC();
+    Vbat = fuel.getVCell();
+    // checkSignal();
+    Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() , soc);
+    if(soc > minBatteryLevel){
+        if (tempDegreeC >= minPublishTemp) {
+            vacChanged = readVacuums();                                   // Then VacuumPublishLimits
+            lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
+            String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
+            Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
+                     "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, tempDegreeC, signalRSSI, signalQuality);
+            if (wakeCount == WakeCountToPublish || vacChanged){
+                publishData();                                            // Publish a message the data
+            }                                                             // Finally read the 4 vacuum transducers
+            goToSleep(SLEEP_NORMAL);
         }
-      } else {
-        Log.trace("(loop) Nothing to publish!");
-      }                                                        // Finally red the 4 vacuum transducers
+    } else {
+        // else SLEEP the Electron for an hour to recharge the battery
+        restartCount++;
+        Log.warn("\n(loop) LOOP Restart. Count: %d, battery: %.1f", restartCount, fuel.getSoC());
+        goToSleep(SLEEP_LOW_BATTERY);
     }
-  } else {
-    // else DEEP SLEEP the Electron for an hours
-    restartCount++;
-    Log.warn("(loop) LOOP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
-    for(int n=0;n<50;n++){
-      delay(200UL);
+    wakeCount++;
+    if (wakeCount > WakeCountToPublish) {
+        wakeCount = 0;
     }
-      // System.sleep(SLEEP_MODE_DEEP, 3600);  //Put the Electron into Deep Sleep for 1 Hour.
-    System.sleep(wakeupPin, FALLING, 3600); // Check again in 1 hour if publish conditions are OK
-  }
-  Log.info("(loop) Going to sleep at: %lu\n", millis());
-  // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
-  // wake at next time boundary + TimeBoundaryOffset seconds
-  RGB.mirrorDisable();
-  Particle.process();
-  uint32_t dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
-  System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
-  Particle.process();
-  w_time = millis();
-  RGB.mirrorTo(B1, B0, B2, true);
-  Particle.process();
-  wakeCount++;
-  if (wakeCount > 3) {
-    wakeCount = 0;
-  }
-  Log.info("(loop) Wake up on: " + Time.timeStr() + ", WakeCount= %d", wakeCount);             // Log wakup time
+    Log.info(" ");
+    Log.info("(loop) Wake-up on: " + Time.timeStr() + ", WakeCount= %d", wakeCount);             // Log wakup time
+}
+
+// ***************************************************************
+// Determine sleep time and mode
+// ***************************************************************
+void goToSleep(int SleepType) {
+    unsigned long  dt = 0;
+    RGB.mirrorDisable();
+    Particle.process();
+    int CurrentHours = Time.hour(Time.now());
+    if (CurrentHours >= NIGHT_SLEEP_START_TIME) {
+        // Night sleep
+        unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
+        // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+        // wake-up at next time boundary + TimeBoundaryOffset seconds
+        dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+        // Deep sleep for the night
+        Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
+        delay(5000UL);
+        System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
+
+    } else if (SleepType == SLEEP_LOW_BATTERY){
+        // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
+        Log.info("(goToSleep) Battery below 20 percent. Deep sleep for one hour.");
+        delay(5000UL);
+        System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+
+    } else if (SleepType == SLEEP_FIVE_MINUTES) {
+        // Five minutes retry sleep
+        Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
+        delay(5000UL);
+        System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
+
+    } else {
+        // Normal sleep i.e. STOP Mode sleep
+        // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+        dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
+        Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
+        delay(5000UL);
+        System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+    }
+    // wake-up-up time
+    w_time = millis();
+    RGB.mirrorTo(B1, B0, B2, true);
+    for(int i=0; i<30; i++) { // Gives 3 seconds to system
+        Particle.process();
+        delay(100);
+    }
 }
 
 // ***************************************************************
 // Publish data
 // ***************************************************************
 bool publishData() {
-  // waitUntil(Particle.connected);
-  Log.info("(publishData) Connected to Particle. Publishing now...");
-  syncCloudTime();                                          // Sync time with cloud as required
-  checkSignal();                                        // Read cellular signal strength and quality
-  if (newGenTimestamp == 0) {
-    newGenTimestamp = Time.now();
-  }
-  bool pubSuccess = Particle.publish(myEventName,
-        makeJSON(noSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3],
-                  tempDegreeC, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality),
-        PRIVATE, NO_ACK);
-  for(int i=0; i<300; i++) { // Gives 3 seconds to send the data
-    Particle.process();
-    delay(10);
-  }
-  if (pubSuccess){
-    Log.info("(publishData) Published success!");
-    // Log.info("(publishData) Incrementing noSerie now");
-    noSerie++;
-  } else {
-    FailCount++;
-    Log.warn("(publishData) Published fail! Count: %d :(", FailCount);
-    delay(500);
-  }
-  return pubSuccess;
+    bool pubSuccess = false;
+    if (Particle.connected() == false) {
+        Log.info("(publishData) Not connected! Connecting to Particle cloud.");
+        Particle.connect();
+    }
+    if (waitFor(Particle.connected, 60000)) {
+        Log.info("(publishData) Connected to Particle cloud!");
+        syncCloudTime();
+        if (myEventName == ""){
+            myID = System.deviceID();
+            getDeviceEventName(myID);
+        }                                          // Sync time with cloud as required
+        checkSignal();                                            // Read cellular signal strength and quality
+        if (newGenTimestamp == 0 || Time.year(newGenTimestamp) > 2030) {
+            newGenTimestamp = Time.now();
+        }
+        String msg = makeJSON(noSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3],
+            tempDegreeC, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality);
+        Log.info("(publishData) Publishing now...");
+        pubSuccess = Particle.publish(myEventName, msg, PRIVATE, NO_ACK);
+        for(int i=0; i<100; i++) { // Gives 10 seconds to send the data
+            Particle.process();
+            delay(100);
+        }
+        if (pubSuccess){
+            Log.info("(publishData) Published success!");
+            // Log.info("(publishData) Incrementing noSerie now");
+            noSerie++;
+        } else {
+            FailCount++;
+            Log.warn("(publishData) Published fail! Count: %d :(", FailCount);
+            delay(500);
+        }
+    } else {
+        Log.info("(publishData) Attempt to connect timeout after 30 seconds. Not connected!");
+    }
+    return pubSuccess;
 }
 
 // ***************************************************************
 // readThermistor: Read and log the temperature
 // ***************************************************************
-float readThermistor(int NSamples, int interval){
-  // float thermistorRawValue;
-  digitalWrite(thermistorPowerPin, true); // Turn ON thermistor Power
-  delay(5UL);                           // Wait for voltage to stabilize
-  float sum = 0;
-  for (int i=0; i< NSamples; i++) {
-    delay(interval);              // Delay between successives readings
-    sum += thermistor->readTempC(); // Read temperature and accumulate the readings
-  }
-  digitalWrite(thermistorPowerPin, false); // Turn OFF thermistor
-  float temp = sum / NSamples;          // Average the readings
-  Log.info("(readThermistor) Temperature = %.1f°C", temp); // Log final value at info level
-  return temp;
+float readThermistor(int NSamples, int interval) {
+    // float thermistorRawValue;
+    digitalWrite(thermistorPowerPin, true); // Turn ON thermistor Power
+    delay(5UL);                           // Wait for voltage to stabilize
+    float sum = 0;
+    for (int i=0; i< NSamples; i++) {
+        delay(interval);              // Delay between successives readings
+        sum += thermistor->readTempC(); // Read temperature and accumulate the readings
+    }
+    digitalWrite(thermistorPowerPin, false); // Turn OFF thermistor
+    float temp = sum / NSamples;          // Average the readings
+    Log.info("(readThermistor) Temperature = %.1f°C", temp); // Log final value at info level
+    return temp;
 }
 
 // ***************************************************************
 // Read and average vacuum readings
 // ***************************************************************
-bool readVacuums(){
-  float VacuumRawData[] = {0, 0, 0, 0};                                     // Vacuum raw data array
-  digitalWrite(vacuum5VoltsEnablePin, true);                                // Turn ON the vacuum trasnducer
-  minActualVacuum = 100;                                                    // Reset min to a high value initially
-  delay(25UL);                                                              // Wait 25 ms for the vacuum sensors to stabilize
-  /* Read and log the vacuum values for the four (4) sensors */
-  for (int i = 0; i < NVac; i++) {
-    Particle.process();
-    VacuumRawData[i] = AverageReadings(VacuumPins[i], NUMSAMPLES, SAMPLEsINTERVAL); // Average multiple raw readings to reduce noise
-    Log.trace("(readVacuums) Vacuum_%d_raw = %.0f", i, VacuumRawData[i]);           // Log raw data at trace level for debugging
-    VacuumInHg[i] = VacRaw2inHg(VacuumRawData[i]);
-    if (VacuumInHg[i] < -30) {VacuumInHg[i] = 0; };                                 // Convert to inHg
-    Log.info("(readVacuums) Vacuum_%d = %.1f inHg", i, VacuumInHg[i]);              // Log final value at info level
-    minActualVacuum = min(minActualVacuum, VacuumInHg[i]);                          // Find the minimum readings of all sensors
-  }
-  Log.info("(readVacuums) Min Vacuum readings %.1f inHg", minActualVacuum);         // Log final value at info level
-  digitalWrite(vacuum5VoltsEnablePin, false);                                       // Turn OFF the pressure transducers
-  // Check if there was a significant change in the vacuum readings
-  bool vacChanged = false;
-  for (int i = 0; i < NVac; i++){
-     if (abs(PrevVacuumInHg[i] - VacuumInHg[i]) > VacMinChange ){
-       vacChanged = true;
-       break;
-     }
-  }
-  for (int i = 0; i < NVac; i++){
-    PrevVacuumInHg[i] = VacuumInHg[i];                                      // Remember previous vacuum readings
-  }
-  return vacChanged;
+bool readVacuums() {
+    float VacuumRawData[] = {0, 0, 0, 0};                                     // Vacuum raw data array
+    digitalWrite(vacuum5VoltsEnablePin, true);                                // Turn ON the vacuum trasnducer
+    minActualVacuum = 100;                                                    // Reset min to a high value initially
+    delay(25UL);                                                              // Wait 25 ms for the vacuum sensors to stabilize
+    /* Read and log the vacuum values for the four (4) sensors */
+    for (int i = 0; i < NVac; i++) {
+        Particle.process();
+        VacuumRawData[i] = AverageReadings(VacuumPins[i], NUMSAMPLES, SAMPLEsINTERVAL); // Average multiple raw readings to reduce noise
+        Log.trace("(readVacuums) Vacuum_%d_raw = %.0f", i, VacuumRawData[i]);           // Log raw data at trace level for debugging
+        VacuumInHg[i] = VacRaw2inHg(VacuumRawData[i]);
+        if (VacuumInHg[i] < -30) {VacuumInHg[i] = 0; };                                 // Convert to inHg
+        Log.trace("(readVacuums) Vacuum_%d = %.1f inHg", i, VacuumInHg[i]);              // Log final value at info level
+        minActualVacuum = min(minActualVacuum, VacuumInHg[i]);                          // Find the minimum readings of all sensors
+    }
+    Log.info("(readVacuums) Min Vacuum readings %.1f inHg", minActualVacuum);         // Log final value at info level
+    digitalWrite(vacuum5VoltsEnablePin, false);                                       // Turn OFF the pressure transducers
+    // Check if there was a significant change in the vacuum readings
+    bool vacChanged = false;
+    for (int i = 0; i < NVac; i++){
+        if (abs(PrevVacuumInHg[i] - VacuumInHg[i]) > VacMinChange ){
+            vacChanged = true;
+            break;
+        }
+    }
+    for (int i = 0; i < NVac; i++){
+        PrevVacuumInHg[i] = VacuumInHg[i];                                      // Remember previous vacuum readings
+    }
+    return vacChanged;
 }
 
 // ***************************************************************
 /* Convert ADC raw value to Kpa or inHg
- * From MPXV6115V6U datasheet
- * Vout = Vs * (K_fact * Vac + 0.92)
- * where K_fact = 0.007652
- * thus : Vac_kpa = (Vout / Vs * K_fact) - (0,92 / K_fact)
- * and Vout = (Vref*Vraw/4095UL)*(r1+r2)/r2
- * To convert kpa to Hg (inch of mercury) multiply by 0.295301
- */
- // ***************************************************************
+* From MPXV6115V6U datasheet
+* Vout = Vs * (K_fact * Vac + 0.92)
+* where K_fact = 0.007652
+* thus : Vac_kpa = (Vout / Vs * K_fact) - (0,92 / K_fact)
+* and Vout = (Vref*Vraw/4095UL)*(r1+r2)/r2
+* To convert kpa to Hg (inch of mercury) multiply by 0.295301
+*/
+// ***************************************************************
 double VacRaw2inHg(float raw) {
-  double Vout = (Vref * raw / 4095.0f) * (R1 + R2) / R2; // Vout = Vref*Vraw*(r1_+r2_)/(4096*r2_)
-  double Vac_kpa = (Vout/(K_fact*Vs)) - 0.92/K_fact; // Vac_kpa = (Vout-(Vs-0,92))/(Vs*k)
-  double Vac_inHg = Vac_kpa * 0.2953001;
-  return Vac_inHg;                        // multiplie par 0.295301 pour avoir la valeur en Hg
+    double Vout = (Vref * raw / 4095.0f) * (R1 + R2) / R2; // Vout = Vref*Vraw*(r1_+r2_)/(4096*r2_)
+    double Vac_kpa = (Vout/(K_fact*Vs)) - 0.92/K_fact; // Vac_kpa = (Vout-(Vs-0,92))/(Vs*k)
+    double Vac_inHg = Vac_kpa * 0.2953001;
+    return Vac_inHg;                        // multiplie par 0.295301 pour avoir la valeur en Hg
 }
 
 // ***************************************************************
 /* Read and log the ambieant light intensity */
 // ***************************************************************
-float readLightIntensitySensor(){
-  float lightRawValue;
-  float lightIntensity;
-  digitalWrite(lightSensorPowerPin, true);                            // Turn ON the light sensor Power
-  lightRawValue = AverageReadings(lightSensorInputPin, NUMSAMPLES, 10); // Average multiple raw readings to reduce noise
-  Log.trace("(readLightIntensitySensor) lightRawValue = %.0f", lightRawValue);                   // Log raw data at trace level for debugging
-  lightIntensity = LightRaw2Lux(lightRawValue);                       // Convert to Lux
-  Log.info("(readLightIntensitySensor) Light int. = %.0f Lux", lightIntensity);                  // Log final value at info level
-  digitalWrite(lightSensorPowerPin, false);                           // Turn OFF the light sensor
-  return lightIntensity;
+float readLightIntensitySensor() {
+    float lightRawValue;
+    float lightIntensity;
+    digitalWrite(lightSensorPowerPin, true);                            // Turn ON the light sensor Power
+    lightRawValue = AverageReadings(lightSensorInputPin, NUMSAMPLES, 10); // Average multiple raw readings to reduce noise
+    Log.trace("(readLightIntensitySensor) lightRawValue = %.0f", lightRawValue);                   // Log raw data at trace level for debugging
+    lightIntensity = LightRaw2Lux(lightRawValue);                       // Convert to Lux
+    Log.info("(readLightIntensitySensor) Light int. = %.0f Lux", lightIntensity);                  // Log final value at info level
+    digitalWrite(lightSensorPowerPin, false);                           // Turn OFF the light sensor
+    return lightIntensity;
 }
 
 // ***************************************************************
 // Check supply input voltage
 // ***************************************************************
-float readVin(){
-  float raw = AverageReadings(A6, 5, 1);                              // Average 5 readings at 1 ms interval
-  float Sf = 4.414;                                                   // Precise value TDB
-  float Vin = Sf * Vcc * raw / 4095.0f;
-  return Vin;
+float readVin() {
+    float raw = AverageReadings(A6, 5, 1);                              // Average 5 readings at 1 ms interval
+    float Sf = 4.012;                                                   // Precise value TDB
+    float Vin = Sf * Vcc * raw / 4095.0f;
+    return Vin;
 }
 
 // ***************************************************************
 /* Convert ADC numerical value to light intensity in Lux for the APDS-9007 chip
- * The resistor LOADRESISTOR is used to convert (Iout) the output current to a voltage
- * that is measured by the analog to digital converter. This chip is logarithmic (base 10).
- */
- // ***************************************************************
-double LightRaw2Lux (float raw){
-  double Iout = (Vcc * raw / 4095.0f) / LOADRESISTOR; // Calculate the chip output current from raw data
-  Log.trace("(LightRaw2Lux) Iout = %.6f A", Iout);             // Log (trace) intermediate results for debugging
-  double Lux = pow( 10.0f, Iout / 0.00001f);    // Compute the value in LUX
-  return Lux;
+* The resistor LOADRESISTOR is used to convert (Iout) the output current to a voltage
+* that is measured by the analog to digital converter. This chip is logarithmic (base 10).
+*/
+// ***************************************************************
+double LightRaw2Lux (float raw) {
+    double Iout = (Vcc * raw / 4095.0f) / LOADRESISTOR; // Calculate the chip output current from raw data
+    Log.trace("(LightRaw2Lux) Iout = %.6f A", Iout);             // Log (trace) intermediate results for debugging
+    double Lux = pow( 10.0f, Iout / 0.00001f);    // Compute the value in LUX
+    return Lux;
 }
 
 // ***************************************************************
 /* Acquire N readings of an analog input and compute the average */
 // ***************************************************************
 float AverageReadings (int anInputPinNo, int NSamples, int interval) {
-  float sum = 0;
-  for (int i=0; i< NSamples; i++) {
-    delay(interval);                    // In case a delay is required between successives readings
-    sum += analogRead(anInputPinNo); // Read data from selected analog input and accumulate the readings
-    Particle.process();
-  }
-  return sum / NSamples;         // Divide the sum by the number of readings
+    float sum = 0;
+    for (int i=0; i< NSamples; i++) {
+        delay(interval);                    // In case a delay is required between successives readings
+        sum += analogRead(anInputPinNo); // Read data from selected analog input and accumulate the readings
+        Particle.process();
+    }
+    return sum / NSamples;         // Divide the sum by the number of readings
 }
 
 // ***************************************************************
 // Formattage standard pour les données sous forme JSON
 // ***************************************************************
-String makeJSON(uint32_t numSerie, uint32_t timeStamp, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, int RSSI, int signalQual){
-  char publishString[200];
-  sprintf(publishString,"{\"noSerie\": %lu,\"generation\": %lu,\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.2f,\"soc\":%.1f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d}",
-          numSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], tempDegreeC, lightIntensityLux, Vin, soc, volt, RSSI, signalQual);
-  Log.info("(makeJSON) %s", publishString);
-  return publishString;
+String makeJSON(int numSerie, int timeStamp, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, int RSSI, int signalQual) {
+    char publishString[200];
+    sprintf(publishString,"{\"noSerie\": %d,\"generation\": %lu,\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.3f,\"soc\":%.2f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d}",
+    numSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], tempDegreeC, lightIntensityLux, Vin, soc, volt, RSSI, signalQual);
+    Log.info("(makeJSON) %s", publishString);
+    return publishString;
 }
 
 // ***************************************************************
 // Read cellular data and substract from the previous cycle
 // ***************************************************************
 void readCellularData(String s, bool prtFlag) {
-  CellularData data;
-  if (!Cellular.getDataUsage(data)) {
-    Log.warn("(readCellularData) Error! Not able to get Cellular data.");
-  }
-  else {
-    deltaTx = data.tx_session - txPrec;
-    deltaRx = data.rx_session - rxPrec;
-    if (prtFlag) {
+    CellularData data;
+    if (!Cellular.getDataUsage(data)) {
+        Log.warn("(readCellularData) Error! Not able to get Cellular data.");
     }
-    txPrec = data.tx_session;
-    rxPrec = data.rx_session;
-  }
+    else {
+        deltaTx = data.tx_session - txPrec;
+        deltaRx = data.rx_session - rxPrec;
+        if (prtFlag) {
+        }
+        txPrec = data.tx_session;
+        rxPrec = data.rx_session;
+    }
 }
 
 // ***************************************************************
 // Read cellular signal strength and quality
 // ***************************************************************
-void checkSignal() {
-  CellularSignal sig = Cellular.RSSI();
-  signalRSSI = sig.rssi;
-  signalQuality = sig.qual;
-  String s = "RSSI.QUALITY: \t" + String(signalRSSI) + "\t" + String(signalQuality) + "\t";
+bool checkSignal() {
+    CellularSignal sig = Cellular.RSSI();
+    signalRSSI = sig.rssi;
+    signalQuality = sig.qual;
+    String s = "RSSI.QUALITY: \t" + String(signalRSSI) + "\t" + String(signalQuality) + "\t";
+    if (sig.rssi == 1){
+        Log.info("(checkSignal) Cellular module or time-out error");
+        return false;
+    } else if (sig.rssi == 2){
+        Log.info("(checkSignal) RSSI value is not known, not detectable or currently not available");
+        return false;
+    } else {
+        Log.info("(checkSignal) Read the cellular signal!");
+        return true;
+    }
 }
 
 // ***************************************************************
 // Synchronize clock with cloud one a day
 // ***************************************************************
-void syncCloudTime(){
-  if (Time.day() != lastDay || Time.year() < 2018) { // a new day calls for a sync
-    Log.info("(syncCloudTime) Sync time");
-    if(waitFor(Particle.connected, maxConnectTime * 1000UL)) {
-      if (Particle.connected()){
-        Particle.syncTime();
-        start = millis();
-        while (millis() - start < 1000UL) {
-                delay (10);
-                Particle.process(); // Wait a second to received the time.
+void syncCloudTime() {
+    if (Time.day() != lastDay || Time.year() < 2018) { // a new day calls for a sync
+        Log.info("(syncCloudTime) Sync time");
+        if(waitFor(Particle.connected, maxConnectTime * 1000UL)) {
+            if (Particle.connected()){
+                Particle.syncTime();
+                start = millis();
+                while (millis() - start < 1000UL) {
+                    delay (20);
+                    Particle.process(); // Wait a second to received the time.
+                }
+                lastDay = Time.day();
+                Log.info("(syncCloudTime) Sync time completed");
+            } else {
+                Log.warn("(syncCloudTime) Failed to connect! Try again in 5 miutes");
+                restartCount++;
+                Log.warn("(syncCloudTime) SETUP Restart. Count: %d, battery: %.1f", restartCount, fuel.getSoC());
+                goToSleep(SLEEP_FIVE_MINUTES);
+            }
         }
-        lastDay = Time.day();
-        Log.info("(syncCloudTime) Sync time completed");
-      } else {
-        Log.warn("(syncCloudTime) Failed to connect! Try again in 5 miutes");
-        restartCount++;
-        Log.warn("(syncCloudTime) SETUP Restart. Count: %lu, battery: %.1f", restartCount, fuel.getSoC());
-        System.sleep(SLEEP_MODE_DEEP, 300);
-      }
     }
-  }
-  // RGB.mirrorDisable();
+    // RGB.mirrorDisable();
+}
+
+//Dev name      No de lignes
+// VA1-4     4  Lignes A1 à A4 RSSI = -77, qual 37
+// VA5B1-2   3  Lignes A5, B1 et B2
+// VC1-3     3  Lignes C1 à C3
+// VC4-6     3  Lignes C4 à C6
+// VC7-8     2  Lignes C7 et C8
+// VD1A-2B   4  Lignes D1A, D1B, D2A et D2B
+// VE1-3     3  Lignes E1 à E3
+// VE4-6     3  Lignes E4 à E6
+// VE7-9     3  Lignes E7 à E9
+// VE10-12   3  Lignes E10 à E12
+// VF1-3     3  Lignes F1 à F3
+// VF4-6     3  Lignes F4 à F6
+// VF7-9     3  Lignes F7 à F9 RSSI = -81, qual 37
+// VF10-12   3  Lignes F10 à F12
+// VF13-16   4  Lignes F13 à F16
+// VG1-2-H14 3  Lignes G1, G2 et H14
+// VG3-5     3  Lignes G3 à G5
+// VG6-8     3  Lignes G6 à G8
+// VG9-12    4  Lignes G9 à G12
+// VH2-4     3  Lignes H2 à H4
+// VH5-7     3  Lignes H5 à H7
+// VH8-10    3  Lignes H8 à H10
+// VH11-13   3  Lignes H11 à H13 RSSI = -91, qual 19
+
+String getDeviceEventName(String devId){
+    // std::unordered_map<std::string, String> deviceMap;
+    // deviceMap.insert({"36004f000251353337353037", "EB-Elec-Dev1"});
+    // deviceMap.insert({"240051000c51343334363138", "EB-VF7-9"});
+    // myNameIs = deviceMap[devId];
+    if (devId == "36004f000251353337353037"){
+        myNameIs = "EB-Elec-Dev1";
+        myEventName = "test1_Vacuum/Lignes";
+    } else if (devId == "240051000c51343334363138"){
+        myNameIs = "EB-VF7-9";
+        myEventName = "test2_Vacuum/Lignes";
+    } else {
+        myEventName = "Vacuum/Lignes";
+    }
+    Log.info("Device Name is: " + myNameIs);
+    Log.info("Event Name is: " + myEventName);
 }
