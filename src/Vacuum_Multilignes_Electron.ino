@@ -54,7 +54,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.7.39";             // Version of this firmware.
+String FirmwareVersion = "0.7.42";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -69,7 +69,7 @@ String myNameIs = "";
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
 #define NIGHT_SLEEP_START_TIME 21             // Sleep for the night beginning at 19h00
 #define NIGHT_SLEEP_DURATION_HR 10            // Night sleep duration in hours
-#define TimeBoundaryOffset 1                  // wake-up at time boundary plus some seconds
+#define TimeBoundaryOffset -10                // wake-up at time boundary plus some seconds
 #define WatchDogTimeout 480000UL              // Watch Dog Timeaout delay
 
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
@@ -79,10 +79,11 @@ String myNameIs = "";
 
 #define BLUE_LED  D7                          // Blue led awake activity indicator
 #define minBatteryLevel 30                    // Sleep unless battery is above this level
-#define maxConnectTime 900                     // Maximum allowable time for connection to the Cloud
+#define maxConnectTime 900                    // Maximum allowable time for connection to the Cloud
 #define SLEEP_NORMAL 0
 #define SLEEP_LOW_BATTERY 1
-#define SLEEP_FIVE_MINUTES 2
+#define SLEEP_TWO_MINUTES 2
+#define SLEEP_All_NIGHT 3
 
 // wakeupPin definition
 #define wakeupPin  D2
@@ -131,8 +132,7 @@ int deltaTx  = 0;                             // Difference tx data count
 int deltaRx  = 0;                             // Difference rx data count
 int startTime = 0;
 int start    = 0;
-int w_time   = 0;                        // Wakeup time in ms
-int aw_time  = 0;                        // Awake time in sec
+int wakeup_time   = 0;                             // Wakeup time in ms
 retained int lastDay = 0;
 // int lastDay = 0;
 
@@ -163,9 +163,9 @@ Serial1LogHandler log1Handler(115200, LOG_LEVEL_TRACE, {   // Logging level for 
 // ***************************************************************
 void setup() {
     Log.info("\n\n__________BOOTING_________________");
-    Log.info("(setup) Boot on: " + Time.timeStr());
-    Log.info("(setup) Firmware: " + FirmwareVersion);
+    Log.info("(setup) Boot on: " + Time.timeStr(Time.now() - 5 * 60 * 60));
     Log.info("(setup) System version: " + System.version());
+    Log.info("(setup) Firmware: " + FirmwareVersion);
     Log.info("(setup) Firmware date: " + FirmwareDate);
     Time.zone(-5);
     pinMode(vacuum5VoltsEnablePin, OUTPUT);        // Put all control pins in output mode
@@ -197,8 +197,8 @@ void setup() {
             Particle.process();
             if (Particle.connected()){
                 Log.info("(setup) Cloud connected! - " + Time.timeStr());
-                while (Time.year() < 2018 || Time.year() > 2050) // Make sure the time is valid
-                {
+                // while (Time.year() < 2018 || Time.year() > 2050) // Make sure the time is valid
+                if (not(Time.isValid())) {
                     Log.info("(setup) Syncing time ");
                     Particle.syncTime();
                     waitUntil(Particle.syncTimeDone);
@@ -210,7 +210,7 @@ void setup() {
                 Log.warn("(setup) Failed to connect! Try again in 5 miutes");
                 restartCount++;
                 Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f\%, Vbat: %.3f", restartCount, soc, Vbat);
-                goToSleep(SLEEP_FIVE_MINUTES);
+                goToSleep(SLEEP_TWO_MINUTES);
             }
         }
     } else {
@@ -242,8 +242,12 @@ void loop() {
                      "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, tempDegreeC, signalRSSI, signalQuality);
             if (wakeCount == WakeCountToPublish || vacChanged){
                 publishData();                                            // Publish a message the data
+            }
+            if (Time.hour(Time.now()) >= NIGHT_SLEEP_START_TIME) {
+                goToSleep(SLEEP_All_NIGHT);
+            } else {
+                goToSleep(SLEEP_NORMAL);
             }                                                             // Finally read the 4 vacuum transducers
-            goToSleep(SLEEP_NORMAL);
         }
     } else {
         // else SLEEP the Electron for an hour to recharge the battery
@@ -264,43 +268,87 @@ void loop() {
 // ***************************************************************
 void goToSleep(int SleepType) {
     unsigned long  dt = 0;
-    RGB.mirrorDisable();
+    RGB.mirrorDisable();                                 // Disable RGB LED mirroring
     Particle.process();
+
     int CurrentHours = Time.hour(Time.now());
-    if (CurrentHours >= NIGHT_SLEEP_START_TIME) {
-        // Night sleep
-        unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
-        // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
-        // wake-up at next time boundary + TimeBoundaryOffset seconds
-        dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
-        // Deep sleep for the night
-        Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
-        delay(5000UL);
-        System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
+    // if (CurrentHours >= NIGHT_SLEEP_START_TIME) {
+    //     // Night sleep
+    //     unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
+    //     // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+    //     // wake-up at next time boundary + TimeBoundaryOffset seconds
+    //     dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+    //     // Deep sleep for the night
+    //     Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
+    //     delay(3000UL);
+    //     Particle.disconnect();
+    //     delay(3000UL);
+    //     System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
+    //
+    // } else if (SleepType == SLEEP_LOW_BATTERY){
+    //     // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
+    //     Log.info("(goToSleep) Battery below 20 percent. Deep sleep for one hour.");
+    //     delay(5000UL);
+    //     System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+    //
+    // } else if (SleepType == SLEEP_TWO_MINUTES) {
+    //     // Five minutes retry sleep
+    //     Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
+    //     Particle.disconnect();
+    //     delay(5000UL);
+    //     System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
+    //
+    // } else {
+    //     // Normal sleep i.e. STOP Mode sleep
+    //     // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+    //     dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
+    //     Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
+    //     delay(5000UL);
+    //     System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+    // }
 
-    } else if (SleepType == SLEEP_LOW_BATTERY){
-        // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-        Log.info("(goToSleep) Battery below 20 percent. Deep sleep for one hour.");
-        delay(5000UL);
-        System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+    switch (SleepType)
+    {
+        case 0:
+            // Normal sleep i.e. STOP Mode sleep
+            // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+            dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
+            Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
+            delay(5000UL);
+            System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+            break;
 
-    } else if (SleepType == SLEEP_FIVE_MINUTES) {
-        // Five minutes retry sleep
-        Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
-        delay(5000UL);
-        System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
+        case 1:
+            // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
+            Log.info("(goToSleep) Battery below 20 percent. Deep sleep for one hour.");
+            delay(5000UL);
+            System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+            break;
 
-    } else {
-        // Normal sleep i.e. STOP Mode sleep
-        // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
-        dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
-        Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
-        delay(5000UL);
-        System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+        case 2:
+            // Two minutes retry sleep
+            Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
+            Particle.disconnect();
+            delay(5000UL);
+            System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
+            break;
+
+        case 3:
+            // Night sleep
+            unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
+            dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+            // Deep sleep for the night
+            Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
+            delay(3000UL);
+            Particle.disconnect();
+            delay(3000UL);
+            System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
+            break;
     }
-    // wake-up-up time
-    w_time = millis();
-    RGB.mirrorTo(B1, B0, B2, true);
+
+    // wake-up time
+    wakeup_time = millis();
+    RGB.mirrorTo(B1, B0, B2, true);                         // Enable RGB LED mirroring
     for(int i=0; i<30; i++) { // Gives 3 seconds to system
         Particle.process();
         delay(100);
@@ -312,11 +360,11 @@ void goToSleep(int SleepType) {
 // ***************************************************************
 bool publishData() {
     bool pubSuccess = false;
-    if (Particle.connected() == false) {
-        Log.info("(publishData) Not connected! Connecting to Particle cloud.");
+    if (not (Particle.connected())) {
+        Log.info("(publishData) NOT CONNECTED! Connecting to Particle cloud.");
         Particle.connect();
     }
-    if (waitFor(Particle.connected, 60000)) {
+    if (waitFor(Particle.connected, 60000)){
         Log.info("(publishData) Connected to Particle cloud!");
         syncCloudTime();
         if (myEventName == ""){
@@ -345,7 +393,8 @@ bool publishData() {
             delay(500);
         }
     } else {
-        Log.info("(publishData) Attempt to connect timeout after 30 seconds. Not connected!");
+        Log.info("(publishData) Attempt to connect timeout after 60 seconds. Not connected!");
+        Log.info("(publishData) Publish cancelled!!!");
     }
     return pubSuccess;
 }
@@ -506,8 +555,13 @@ bool checkSignal() {
     CellularSignal sig = Cellular.RSSI();
     signalRSSI = sig.rssi;
     signalQuality = sig.qual;
-    String s = "RSSI.QUALITY: \t" + String(signalRSSI) + "\t" + String(signalQuality) + "\t";
-    if (sig.rssi == 1){
+    // String s = "RSSI.QUALITY: \t" + String(signalRSSI) + "\t" + String(signalQuality) + "\t";
+    if (sig.rssi == 0 || sig.qual == 0){
+        Log.info("(checkSignal) NETWORK CONNECTION LOST!!");
+        delay(2000UL);
+        System.reset();
+        // return false;
+    } else if (sig.rssi == 1){
         Log.info("(checkSignal) Cellular module or time-out error");
         return false;
     } else if (sig.rssi == 2){
@@ -539,7 +593,7 @@ void syncCloudTime() {
                 Log.warn("(syncCloudTime) Failed to connect! Try again in 5 miutes");
                 restartCount++;
                 Log.warn("(syncCloudTime) SETUP Restart. Count: %d, battery: %.1f", restartCount, fuel.getSoC());
-                goToSleep(SLEEP_FIVE_MINUTES);
+                goToSleep(SLEEP_TWO_MINUTES);
             }
         }
     }
