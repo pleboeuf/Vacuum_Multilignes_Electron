@@ -54,7 +54,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.7.42";             // Version of this firmware.
+String FirmwareVersion = "0.7.43";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -94,11 +94,15 @@ String myNameIs = "";
 #define SERIESRESISTOR 10000UL                // the value of the resistor in serie with the thermistor
 #define THERMISTORNOMINAL 10000UL             // thermistor resistance at 25 degrees C
 
-Thermistor *thermistor;
+Thermistor *ext_thermistor;
+Thermistor *battery_thermistor;
 int thermistorPowerPin = D1;
-int thermistorInputPin = A4;
+int Ext_thermistorInputPin = A4;
+int Bat_thermistorInputPin = A7;
+int VinPin = A6;
+
 float tempDegreeC = 0;
-float minPublishTemp = -10;                   // Do not publish below -10
+float minPublishTemp = -5;                    // Do not publish below -5
 String myID;                                  // Device Id
 
 // Light sensor parameters and variable definitions
@@ -180,7 +184,8 @@ void setup() {
     pmic.setChargeVoltage(4112);                   // Set charge voltage to standard 100%
     pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
     // pmic.setInputVoltageLimit(4840); //Set the lowest input voltage to 4.84 volts. This keeps my 6v solar panel from operating below 4.84 volts.
-    thermistor = new Thermistor(thermistorInputPin, SERIESRESISTOR, 4095, THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, NUMSAMPLES, SAMPLEsINTERVAL);
+    ext_thermistor = new Thermistor(Ext_thermistorInputPin, SERIESRESISTOR, 4095, THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, NUMSAMPLES, SAMPLEsINTERVAL);
+    battery_thermistor = new Thermistor(Bat_thermistorInputPin, SERIESRESISTOR, 4095, THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, NUMSAMPLES, SAMPLEsINTERVAL);
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
     delay(5000UL);
@@ -188,7 +193,7 @@ void setup() {
     getDeviceEventName(myID);
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
-    tempDegreeC = readThermistor(NUMSAMPLES, 1);              // First check the temperature
+    tempDegreeC = readThermistor(NUMSAMPLES, 1, "Ext");              // First check the temperature
     Log.info("\n(setup) Boot battery voltage: %0.3f, charge level: %0.2f" , Vbat, soc);
     if(soc > minBatteryLevel && tempDegreeC >= minPublishTemp){
         Log.info("(setup) Connecting to tower and cloud.");
@@ -227,7 +232,7 @@ void setup() {
 // ***************************************************************
 void loop() {
     bool vacChanged = false;
-    tempDegreeC = readThermistor(NUMSAMPLES, 1);                      // First check the temperature
+    tempDegreeC = readThermistor(NUMSAMPLES, 1, "Ext");                      // First check the temperature
     // Do not publish if its too cold or charge is lower than 20%
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
@@ -402,14 +407,17 @@ bool publishData() {
 // ***************************************************************
 // readThermistor: Read and log the temperature
 // ***************************************************************
-float readThermistor(int NSamples, int interval) {
+float readThermistor(int NSamples, int interval, String SelectThermistor) {
     // float thermistorRawValue;
     digitalWrite(thermistorPowerPin, true); // Turn ON thermistor Power
     delay(5UL);                           // Wait for voltage to stabilize
     float sum = 0;
     for (int i=0; i< NSamples; i++) {
         delay(interval);              // Delay between successives readings
-        sum += thermistor->readTempC(); // Read temperature and accumulate the readings
+        if (SelectThermistor == "Ext")
+            sum += ext_thermistor->readTempC(); // Read temperature and accumulate the readings
+        else
+            sum += battery_thermistor->readTempC(); // Read temperature and accumulate the readings
     }
     digitalWrite(thermistorPowerPin, false); // Turn OFF thermistor
     float temp = sum / NSamples;          // Average the readings
@@ -487,7 +495,7 @@ float readLightIntensitySensor() {
 // Check supply input voltage
 // ***************************************************************
 float readVin() {
-    float raw = AverageReadings(A6, 5, 1);                              // Average 5 readings at 1 ms interval
+    float raw = AverageReadings(VinPin, 5, 1);                              // Average 5 readings at 1 ms interval
     float Sf = 4.012;                                                   // Precise value TDB
     float Vin = Sf * Vcc * raw / 4095.0f;
     return Vin;
