@@ -49,12 +49,12 @@ Sleep duration: See #define SLEEPTIMEinMINUTES
 // #include <unordered_map>
 // #include "ClosedCube_Si7051.h"
 
-SYSTEM_MODE(MANUAL);
+SYSTEM_MODE(SEMI_AUTOMATIC);
 // SYSTEM_THREAD(ENABLED);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.7.43";             // Version of this firmware.
+String FirmwareVersion = "0.7.45";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -78,7 +78,6 @@ String myNameIs = "";
 #define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
 
 #define BLUE_LED  D7                          // Blue led awake activity indicator
-#define minBatteryLevel 30                    // Sleep unless battery is above this level
 #define maxConnectTime 900                    // Maximum allowable time for connection to the Cloud
 #define SLEEP_NORMAL 0
 #define SLEEP_LOW_BATTERY 1
@@ -93,6 +92,8 @@ String myNameIs = "";
 #define BCOEFFICIENT 3470                     // The beta coefficient at 0 degrees of the thermistor (nominal is 3435 (25/85))
 #define SERIESRESISTOR 10000UL                // the value of the resistor in serie with the thermistor
 #define THERMISTORNOMINAL 10000UL             // thermistor resistance at 25 degrees C
+
+float minBatteryLevel = 30.0;                    // Sleep unless battery is above this level
 
 Thermistor *ext_thermistor;
 Thermistor *battery_thermistor;
@@ -181,7 +182,7 @@ void setup() {
     // pinMode(D5, INPUT);   // Only required for old PCB design
     // si7051.begin(0x40); // default I2C address is 0x40
     PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
-    pmic.setChargeVoltage(4112);                   // Set charge voltage to standard 100%
+    pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
     pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
     // pmic.setInputVoltageLimit(4840); //Set the lowest input voltage to 4.84 volts. This keeps my 6v solar panel from operating below 4.84 volts.
     ext_thermistor = new Thermistor(Ext_thermistorInputPin, SERIESRESISTOR, 4095, THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, NUMSAMPLES, SAMPLEsINTERVAL);
@@ -318,6 +319,9 @@ void goToSleep(int SleepType) {
             // Normal sleep i.e. STOP Mode sleep
             // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
             dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
+            if (dt > 300 ){
+                dt = 3000UL;
+            }
             Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
             delay(5000UL);
             System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
@@ -325,7 +329,8 @@ void goToSleep(int SleepType) {
 
         case 1:
             // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-            Log.info("(goToSleep) Battery below 20 percent. Deep sleep for one hour.");
+            Log.info("(goToSleep) Battery below %0.1f percent. Deep sleep for one hour.", minBatteryLevel);
+            Particle.disconnect();
             delay(5000UL);
             System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
             break;
@@ -342,6 +347,9 @@ void goToSleep(int SleepType) {
             // Night sleep
             unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
             dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+            if (dt > 12 * 60 * 60 ){
+                dt = 43200UL;
+            }
             // Deep sleep for the night
             Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
             delay(3000UL);
