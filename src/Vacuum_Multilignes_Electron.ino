@@ -54,7 +54,7 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.7.45";             // Version of this firmware.
+String FirmwareVersion = "0.8.6";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -67,9 +67,10 @@ String myNameIs = "";
 #define MINUTES 60UL                          //
 #define WakeCountToPublish 3                  // Number of wake-up before publishing
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
-#define NIGHT_SLEEP_START_TIME 21             // Sleep for the night beginning at 19h00
-#define NIGHT_SLEEP_DURATION_HR 10            // Night sleep duration in hours
-#define TimeBoundaryOffset -10                // wake-up at time boundary plus some seconds
+#define NIGHT_SLEEP_START_TIME_HR 13          // Sleep for the night beginning at 19h00
+#define NIGHT_SLEEP_START_TIME_MIN 30         // Sleep for the night beginning at 19h00
+#define NIGHT_SLEEP_DURATION_HR 0.166         // Night sleep duration in hours
+#define TimeBoundaryOffset -9                 // wake-up at time boundary plus some seconds
 #define WatchDogTimeout 480000UL              // Watch Dog Timeaout delay
 
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
@@ -102,7 +103,11 @@ int Ext_thermistorInputPin = A4;
 int Bat_thermistorInputPin = A7;
 int VinPin = A6;
 
-float tempDegreeC = 0;
+enum chState {off, lowCurrent, highCurrent, unknown};
+chState chargerStatus = unknown;
+
+float ExtTemp = 0;
+float BatteryTemp = 0;
 float minPublishTemp = -5;                    // Do not publish below -5
 String myID;                                  // Device Id
 
@@ -181,10 +186,6 @@ void setup() {
     RGB.mirrorTo(B1, B0, B2, true); // Mirror LED on external LED
     // pinMode(D5, INPUT);   // Only required for old PCB design
     // si7051.begin(0x40); // default I2C address is 0x40
-    PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
-    pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
-    pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
-    // pmic.setInputVoltageLimit(4840); //Set the lowest input voltage to 4.84 volts. This keeps my 6v solar panel from operating below 4.84 volts.
     ext_thermistor = new Thermistor(Ext_thermistorInputPin, SERIESRESISTOR, 4095, THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, NUMSAMPLES, SAMPLEsINTERVAL);
     battery_thermistor = new Thermistor(Bat_thermistorInputPin, SERIESRESISTOR, 4095, THERMISTORNOMINAL, TEMPERATURENOMINAL, BCOEFFICIENT, NUMSAMPLES, SAMPLEsINTERVAL);
     soc = fuel.getSoC();
@@ -194,14 +195,16 @@ void setup() {
     getDeviceEventName(myID);
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
-    tempDegreeC = readThermistor(NUMSAMPLES, 1, "Ext");              // First check the temperature
-    Log.info("\n(setup) Boot battery voltage: %0.3f, charge level: %0.2f" , Vbat, soc);
-    if(soc > minBatteryLevel && tempDegreeC >= minPublishTemp){
+    ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");              // First check the temperature
+    BatteryTemp = readThermistor(NUMSAMPLES, 1, "Bat");
+    Log.info("\n(setup) Battery boot voltage: %0.3f ,charge level: %0.2f, and temperature: %0.1f", Vbat, soc, BatteryTemp);
+    configCharger(true);
+    if (soc > minBatteryLevel && ExtTemp >= minPublishTemp) {
         Log.info("(setup) Connecting to tower and cloud.");
         Particle.connect();
-        if(waitFor(Particle.connected, maxConnectTime * 1000UL)){
+        if (waitFor(Particle.connected, maxConnectTime * 1000UL)) {
             Particle.process();
-            if (Particle.connected()){
+            if (Particle.connected()) {
                 Log.info("(setup) Cloud connected! - " + Time.timeStr());
                 // while (Time.year() < 2018 || Time.year() > 2050) // Make sure the time is valid
                 if (not(Time.isValid())) {
@@ -233,23 +236,24 @@ void setup() {
 // ***************************************************************
 void loop() {
     bool vacChanged = false;
-    tempDegreeC = readThermistor(NUMSAMPLES, 1, "Ext");                      // First check the temperature
+    ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");                      // First check the temperature
     // Do not publish if its too cold or charge is lower than 20%
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
     // checkSignal();
     Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() , soc);
-    if(soc > minBatteryLevel){
-        if (tempDegreeC >= minPublishTemp) {
+    configCharger(true);
+    if (soc > minBatteryLevel) {
+        if (ExtTemp >= minPublishTemp) {
             vacChanged = readVacuums();                                   // Then VacuumPublishLimits
             lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
             String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
             Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
-                     "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, tempDegreeC, signalRSSI, signalQuality);
-            if (wakeCount == WakeCountToPublish || vacChanged){
+                     "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, signalRSSI, signalQuality);
+            if (wakeCount == WakeCountToPublish || vacChanged) {
                 publishData();                                            // Publish a message the data
             }
-            if (Time.hour(Time.now()) >= NIGHT_SLEEP_START_TIME) {
+            if (Time.hour(Time.now()) >= NIGHT_SLEEP_START_TIME_HR) {
                 goToSleep(SLEEP_All_NIGHT);
             } else {
                 goToSleep(SLEEP_NORMAL);
@@ -277,92 +281,105 @@ void goToSleep(int SleepType) {
     RGB.mirrorDisable();                                 // Disable RGB LED mirroring
     Particle.process();
 
-    int CurrentHours = Time.hour(Time.now());
-    // if (CurrentHours >= NIGHT_SLEEP_START_TIME) {
-    //     // Night sleep
-    //     unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
-    //     // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
-    //     // wake-up at next time boundary + TimeBoundaryOffset seconds
-    //     dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
-    //     // Deep sleep for the night
-    //     Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
-    //     delay(3000UL);
-    //     Particle.disconnect();
-    //     delay(3000UL);
-    //     System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
-    //
-    // } else if (SleepType == SLEEP_LOW_BATTERY){
-    //     // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-    //     Log.info("(goToSleep) Battery below 20 percent. Deep sleep for one hour.");
-    //     delay(5000UL);
-    //     System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
-    //
-    // } else if (SleepType == SLEEP_TWO_MINUTES) {
-    //     // Five minutes retry sleep
-    //     Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
-    //     Particle.disconnect();
-    //     delay(5000UL);
-    //     System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
-    //
-    // } else {
-    //     // Normal sleep i.e. STOP Mode sleep
-    //     // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
-    //     dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
-    //     Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
-    //     delay(5000UL);
-    //     System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
-    // }
+    time_t maintenant = Time.now();
+    int CurrentHours = Time.hour(maintenant);
+    int CurrentMin = Time.minute(maintenant);
 
-    switch (SleepType)
-    {
-        case 0:
-            // Normal sleep i.e. STOP Mode sleep
-            // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
-            dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
-            if (dt > 300 ){
-                dt = 3000UL;
-            }
-            Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
-            delay(5000UL);
-            System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
-            break;
+    if (CurrentHours >= NIGHT_SLEEP_START_TIME_HR && CurrentMin >= NIGHT_SLEEP_START_TIME_MIN) {
+        // Night sleep
+        unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
+        // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+        // wake-up at next time boundary + TimeBoundaryOffset seconds
+        dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+        // Deep sleep for the night
+        Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
+        delay(3000UL);
+        Particle.disconnect();
+        Log.info("(goToSleep) dt = %d", dt);
+        if (dt > NIGHT_SLEEP_DURATION_HR * 60 * 60 ){
+            dt = NIGHT_SLEEP_DURATION_HR * 60 * 60;
+        }
+        Log.info("(goToSleep) dt = %d", dt);
+        delay(3000UL);
+        System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
 
-        case 1:
-            // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-            Log.info("(goToSleep) Battery below %0.1f percent. Deep sleep for one hour.", minBatteryLevel);
-            Particle.disconnect();
-            delay(5000UL);
-            System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
-            break;
+    } else if (SleepType == SLEEP_LOW_BATTERY){
+        // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
+        Log.info("(goToSleep) Battery below 20 percent. Deep sleep for one hour.");
+        delay(5000UL);
+        System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
 
-        case 2:
-            // Two minutes retry sleep
-            Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
-            Particle.disconnect();
-            delay(5000UL);
-            System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
-            break;
+    } else if (SleepType == SLEEP_TWO_MINUTES) {
+        // Five minutes retry sleep
+        Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
+        Particle.disconnect();
+        delay(5000UL);
+        System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
 
-        case 3:
-            // Night sleep
-            unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
-            dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
-            if (dt > 12 * 60 * 60 ){
-                dt = 43200UL;
-            }
-            // Deep sleep for the night
-            Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
-            delay(3000UL);
-            Particle.disconnect();
-            delay(3000UL);
-            System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
-            break;
+    } else {
+        // Normal sleep i.e. STOP Mode sleep
+        // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+        dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
+        Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
+        delay(5000UL);
+        System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
     }
+
+    // switch (SleepType)
+    // {
+    //     case 0:
+    //         // Normal sleep i.e. STOP Mode sleep
+    //         // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+    //         dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
+    //         if (dt > 300 ){
+    //             dt = 3000UL;
+    //         }
+    //         Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
+    //         delay(5000UL);
+    //         System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+    //         break;
+    //
+    //     case 1:
+    //         // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
+    //         Log.info("(goToSleep) Battery below %0.1f percent. Deep sleep for one hour.", minBatteryLevel);
+    //         Particle.disconnect();
+    //         delay(5000UL);
+    //         System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+    //         break;
+    //
+    //     case 2:
+    //         // Two minutes retry sleep
+    //         Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
+    //         Particle.disconnect();
+    //         delay(5000UL);
+    //         System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
+    //         break;
+    //
+    //     case 3:
+    //         // Night sleep
+    //         Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes and %d seconds.", CurrentHours, dt / 60, (dt /60)%60);
+    //         // Deep sleep for the night
+    //         delay(1000UL);
+    //         Particle.disconnect();
+    //         delay(3000UL);
+    //         unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
+    //         dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+    //         Log.info("(goToSleep) dt = %d", dt);
+    //         if (dt > NIGHT_SLEEP_DURATION_HR * 60 * 60 ){
+    //             dt = NIGHT_SLEEP_DURATION_HR * 60 * 60;
+    //         }
+    //         Log.info("(goToSleep) dt = %d", dt);
+    //         System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
+    //         delay(2000UL); // Try to fix the no wake-up problem
+    //         break;
+    //     default:
+    //         {}
+    // }
 
     // wake-up time
     wakeup_time = millis();
     RGB.mirrorTo(B1, B0, B2, true);                         // Enable RGB LED mirroring
-    for(int i=0; i<30; i++) { // Gives 3 seconds to system
+    for (int i=0; i<30; i++) { // Gives 3 seconds to system
         Particle.process();
         delay(100);
     }
@@ -377,10 +394,10 @@ bool publishData() {
         Log.info("(publishData) NOT CONNECTED! Connecting to Particle cloud.");
         Particle.connect();
     }
-    if (waitFor(Particle.connected, 60000)){
+    if (waitFor(Particle.connected, 60000)) {
         Log.info("(publishData) Connected to Particle cloud!");
         syncCloudTime();
-        if (myEventName == ""){
+        if (myEventName == "") {
             myID = System.deviceID();
             getDeviceEventName(myID);
         }                                          // Sync time with cloud as required
@@ -389,14 +406,14 @@ bool publishData() {
             newGenTimestamp = Time.now();
         }
         String msg = makeJSON(noSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3],
-            tempDegreeC, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality);
+            ExtTemp, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality);
         Log.info("(publishData) Publishing now...");
         pubSuccess = Particle.publish(myEventName, msg, PRIVATE, NO_ACK);
-        for(int i=0; i<100; i++) { // Gives 10 seconds to send the data
+        for (int i=0; i<100; i++) { // Gives 10 seconds to send the data
             Particle.process();
             delay(100);
         }
-        if (pubSuccess){
+        if (pubSuccess) {
             Log.info("(publishData) Published success!");
             // Log.info("(publishData) Incrementing noSerie now");
             noSerie++;
@@ -420,16 +437,22 @@ float readThermistor(int NSamples, int interval, String SelectThermistor) {
     digitalWrite(thermistorPowerPin, true); // Turn ON thermistor Power
     delay(5UL);                           // Wait for voltage to stabilize
     float sum = 0;
+    float temp = 0;
     for (int i=0; i< NSamples; i++) {
         delay(interval);              // Delay between successives readings
-        if (SelectThermistor == "Ext")
+        if (SelectThermistor == "Ext") {
             sum += ext_thermistor->readTempC(); // Read temperature and accumulate the readings
-        else
+        } else {
             sum += battery_thermistor->readTempC(); // Read temperature and accumulate the readings
+        }
+    }
+    temp = sum / NSamples;          // Average the readings
+    if (SelectThermistor == "Ext") {
+        Log.info("(readThermistor) Temperature Ext. = %.1f°C", temp); // Log final value at info level
+    } else {
+        Log.info("(readThermistor) Temperature Bat. = %.1f°C", temp); // Log final value at info level
     }
     digitalWrite(thermistorPowerPin, false); // Turn OFF thermistor
-    float temp = sum / NSamples;          // Average the readings
-    Log.info("(readThermistor) Temperature = %.1f°C", temp); // Log final value at info level
     return temp;
 }
 
@@ -541,7 +564,7 @@ float AverageReadings (int anInputPinNo, int NSamples, int interval) {
 String makeJSON(int numSerie, int timeStamp, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, int RSSI, int signalQual) {
     char publishString[200];
     sprintf(publishString,"{\"noSerie\": %d,\"generation\": %lu,\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.3f,\"soc\":%.2f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d}",
-    numSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], tempDegreeC, lightIntensityLux, Vin, soc, volt, RSSI, signalQual);
+    numSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], ExtTemp, lightIntensityLux, Vin, soc, volt, RSSI, signalQual);
     Log.info("(makeJSON) %s", publishString);
     return publishString;
 }
@@ -614,6 +637,49 @@ void syncCloudTime() {
         }
     }
     // RGB.mirrorDisable();
+}
+
+void configCharger(bool mode) {
+    PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
+    BatteryTemp = readThermistor(NUMSAMPLES, 1, "Bat");
+    // Mode true: normal operation
+    if (mode == true) {
+        pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
+        if (BatteryTemp <= 10.0 or BatteryTemp >= 45.0) {
+            if (chargerStatus != off) {
+                // Disable charger to protect the battery
+                pmic.setChargeCurrent(0,0,0,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
+                pmic.disableCharging();
+                chargerStatus = off;
+                Log.info("(configCharger) Battery temperature: %0.1f - Disable charger", BatteryTemp);
+            }
+        } else if (BatteryTemp < 15.0) {
+            if (chargerStatus != lowCurrent) {
+                // Reduce the charge current
+                pmic.setChargeCurrent(0,0,0,0,0,1); //Set charging current to 1024mA (512 + 512 offset)
+                pmic.enableCharging();
+                chargerStatus = lowCurrent;
+                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to low current", BatteryTemp);
+            }
+        } else {
+            if (chargerStatus != highCurrent) {
+                // Charge at full current
+                pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
+                chargerStatus = highCurrent;
+                pmic.enableCharging();
+                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to max current", BatteryTemp);
+            }
+        }
+    } else {
+        // Mode false: Disable charger to protect the battery for night sleep
+        if (chargerStatus != off) {
+            // Disable charger to protect the battery
+            pmic.setChargeCurrent(0,0,0,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
+            pmic.disableCharging();
+            chargerStatus = off;
+            Log.info("(configCharger) Battery temperature: %0.1f - Disable charger", BatteryTemp);
+        }
+    }
 }
 
 //Dev name      No de lignes
