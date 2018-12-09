@@ -67,9 +67,9 @@ String myNameIs = "";
 #define MINUTES 60UL                          //
 #define WakeCountToPublish 3                  // Number of wake-up before publishing
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
-#define NIGHT_SLEEP_START_TIME_HR 13          // Sleep for the night beginning at 19h00
-#define NIGHT_SLEEP_START_TIME_MIN 30         // Sleep for the night beginning at 19h00
-#define NIGHT_SLEEP_DURATION_HR 0.166         // Night sleep duration in hours
+#define NIGHT_SLEEP_START_TIME_HR 21          // Sleep for the night beginning at 19h00
+#define NIGHT_SLEEP_START_TIME_MIN 00         // Sleep for the night beginning at 19h00
+#define NIGHT_SLEEP_DURATION_HR 10         // Night sleep duration in hours
 #define TimeBoundaryOffset -9                 // wake-up at time boundary plus some seconds
 #define WatchDogTimeout 480000UL              // Watch Dog Timeaout delay
 
