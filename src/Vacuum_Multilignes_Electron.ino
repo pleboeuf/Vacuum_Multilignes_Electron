@@ -100,7 +100,7 @@ Thermistor *ext_thermistor;
 Thermistor *battery_thermistor;
 int thermistorPowerPin = D1;
 int Ext_thermistorInputPin = A4;
-int Bat_thermistorInputPin = A7;
+int Bat_thermistorInputPin = B5;
 int VinPin = A6;
 
 enum chState {off, lowCurrent, highCurrent, unknown};
