@@ -54,12 +54,12 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.6";             // Version of this firmware.
+String FirmwareVersion = "0.8.7";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
 String FirmwareDate = F_Date + " " + F_Time;  //compilation date and time (UTC)
-String myEventName = "test1_Vacuum/Lignes";    // Name of the event to be sent to the cloud
+String myEventName = "test1_Vacuum/Lignes";   // Name of the event to be sent to the cloud
 String myNameIs = "";
 
 #define SLEEPTIMEinMINUTES 5                  // wake-up every SLEEPTIMEinMINUTES and check if there a reason to publish
@@ -67,9 +67,9 @@ String myNameIs = "";
 #define MINUTES 60UL                          //
 #define WakeCountToPublish 3                  // Number of wake-up before publishing
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
-#define NIGHT_SLEEP_START_TIME_HR 21          // Sleep for the night beginning at 19h00
-#define NIGHT_SLEEP_START_TIME_MIN 00         // Sleep for the night beginning at 19h00
-#define NIGHT_SLEEP_DURATION_HR 10         // Night sleep duration in hours
+#define NIGHT_SLEEP_START_HR 21               // Sleep for the night beginning at 19h00
+#define NIGHT_SLEEP_START_MIN 00              // Sleep for the night beginning at 19h00
+#define NIGHT_SLEEP_LENGTH_HR 10              // Night sleep duration in hours
 #define TimeBoundaryOffset -9                 // wake-up at time boundary plus some seconds
 #define WatchDogTimeout 480000UL              // Watch Dog Timeaout delay
 
@@ -253,7 +253,7 @@ void loop() {
             if (wakeCount == WakeCountToPublish || vacChanged) {
                 publishData();                                            // Publish a message the data
             }
-            if (Time.hour(Time.now()) >= NIGHT_SLEEP_START_TIME_HR) {
+            if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
                 goToSleep(SLEEP_All_NIGHT);
             } else {
                 goToSleep(SLEEP_NORMAL);
@@ -281,100 +281,103 @@ void goToSleep(int SleepType) {
     RGB.mirrorDisable();                                 // Disable RGB LED mirroring
     Particle.process();
 
-    time_t maintenant = Time.now();
-    int CurrentHours = Time.hour(maintenant);
-    int CurrentMin = Time.minute(maintenant);
+    // time_t maintenant = Time.now();
+    // int CurrentHours = Time.hour(maintenant);
+    // int CurrentMin = Time.minute(maintenant);
 
-    if (CurrentHours >= NIGHT_SLEEP_START_TIME_HR && CurrentMin >= NIGHT_SLEEP_START_TIME_MIN) {
-        // Night sleep
-        unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
-        // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
-        // wake-up at next time boundary + TimeBoundaryOffset seconds
-        dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
-        // Deep sleep for the night
-        Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
-        delay(3000UL);
-        Particle.disconnect();
-        Log.info("(goToSleep) dt = %d", dt);
-        if (dt > NIGHT_SLEEP_DURATION_HR * 60 * 60 ){
-            dt = NIGHT_SLEEP_DURATION_HR * 60 * 60;
-        }
-        Log.info("(goToSleep) dt = %d", dt);
-        delay(3000UL);
-        System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
-
-    } else if (SleepType == SLEEP_LOW_BATTERY){
-        // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-        Log.info("(goToSleep) Battery below 20 percent. Deep sleep for one hour.");
-        delay(5000UL);
-        System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
-
-    } else if (SleepType == SLEEP_TWO_MINUTES) {
-        // Five minutes retry sleep
-        Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
-        Particle.disconnect();
-        delay(5000UL);
-        System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
-
-    } else {
-        // Normal sleep i.e. STOP Mode sleep
-        // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
-        dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
-        Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
-        delay(5000UL);
-        System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
-    }
-
-    // switch (SleepType)
-    // {
-    //     case 0:
-    //         // Normal sleep i.e. STOP Mode sleep
-    //         // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
-    //         dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
-    //         if (dt > 300 ){
-    //             dt = 3000UL;
-    //         }
-    //         Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
-    //         delay(5000UL);
-    //         System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
-    //         break;
+    // time_t maintenant = Time.now();
+    // int CurrentHours = Time.hour(maintenant);
+    // int CurrentMin = Time.minute(maintenant);
     //
-    //     case 1:
-    //         // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-    //         Log.info("(goToSleep) Battery below %0.1f percent. Deep sleep for one hour.", minBatteryLevel);
-    //         Particle.disconnect();
-    //         delay(5000UL);
-    //         System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
-    //         break;
+    // if (CurrentHours >= NIGHT_SLEEP_START_HR && CurrentMin >= NIGHT_SLEEP_START_MIN) {
+    //     // Night sleep
+    //     unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_LENGTH_HR * 60;
+    //     // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+    //     // wake-up at next time boundary + TimeBoundaryOffset seconds
+    //     dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+    //     // Deep sleep for the night
+    //     Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes.", CurrentHours, dt / 60);
+    //     delay(3000UL);
+    //     Particle.disconnect();
+    //     Log.info("(goToSleep) dt = %d", dt);
+    //     if (dt > NIGHT_SLEEP_LENGTH_HR * 60 * 60 ){
+    //         dt = NIGHT_SLEEP_LENGTH_HR * 60 * 60;
+    //     }
+    //     Log.info("(goToSleep) dt = %d", dt);
+    //     delay(3000UL);
+    //     System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
     //
-    //     case 2:
-    //         // Two minutes retry sleep
-    //         Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
-    //         Particle.disconnect();
-    //         delay(5000UL);
-    //         System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
-    //         break;
+    // } else if (SleepType == SLEEP_LOW_BATTERY){
+    //     // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
+    //     Log.info("(goToSleep) Battery below 20 percent. Deep sleep for one hour.");
+    //     delay(5000UL);
+    //     System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
     //
-    //     case 3:
-    //         // Night sleep
-    //         Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes and %d seconds.", CurrentHours, dt / 60, (dt /60)%60);
-    //         // Deep sleep for the night
-    //         delay(1000UL);
-    //         Particle.disconnect();
-    //         delay(3000UL);
-    //         unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_DURATION_HR * 60;
-    //         dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
-    //         Log.info("(goToSleep) dt = %d", dt);
-    //         if (dt > NIGHT_SLEEP_DURATION_HR * 60 * 60 ){
-    //             dt = NIGHT_SLEEP_DURATION_HR * 60 * 60;
-    //         }
-    //         Log.info("(goToSleep) dt = %d", dt);
-    //         System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
-    //         delay(2000UL); // Try to fix the no wake-up problem
-    //         break;
-    //     default:
-    //         {}
+    // } else if (SleepType == SLEEP_TWO_MINUTES) {
+    //     // Five minutes retry sleep
+    //     Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
+    //     Particle.disconnect();
+    //     delay(5000UL);
+    //     System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
+    //
+    // } else {
+    //     // Normal sleep i.e. STOP Mode sleep
+    //     // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+    //     dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
+    //     Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
+    //     delay(5000UL);
+    //     System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
     // }
+
+    switch (SleepType)
+    {
+        case 0:
+            // Normal sleep i.e. STOP Mode sleep
+            // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
+            dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
+            if (dt > 300 ){
+                dt = 3000UL;
+            }
+            Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
+            configCharger(false);
+            delay(5000UL);
+            System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+            break;
+
+        case 1:
+            // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
+            Log.info("(goToSleep) Battery below %0.1f percent. Deep sleep for one hour.", minBatteryLevel);
+            Particle.disconnect();
+            delay(5000UL);
+            System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+            break;
+
+        case 2:
+            // Two minutes retry sleep
+            Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
+            Particle.disconnect();
+            delay(5000UL);
+            System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
+            break;
+
+        case 3:
+            // Night sleep
+            Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes and %d seconds.", Time.hour(), dt / 60, (dt /60)%60);
+            // Deep sleep for the night
+            delay(1000UL);
+            Particle.disconnect();
+            delay(3000UL);
+            unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_LENGTH_HR * 60;
+            dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+            Log.info("(goToSleep) dt = %d", dt);
+            if (dt > NIGHT_SLEEP_LENGTH_HR * 60 * 60 ){
+                dt = NIGHT_SLEEP_LENGTH_HR * 60 * 60;
+            }
+            Log.info("(goToSleep) dt = %d", dt);
+            System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
+            delay(2000UL); // Try to fix the no wake-up problem
+            break;
+    }
 
     // wake-up time
     wakeup_time = millis();
