@@ -52,7 +52,7 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.12";             // Version of this firmware.
+String FirmwareVersion = "0.8.15";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -187,6 +187,7 @@ void setup() {
     getDeviceEventName(myID);
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
+    initSI7051();
     ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");              // First check the temperature
     BatteryTemp = readThermistor(NUMSAMPLES, 1, "Bat");
     Log.info("\n(setup) Battery boot voltage: %0.3f ,charge level: %0.2f, and temperature: %0.1f", Vbat, soc, BatteryTemp);
@@ -233,7 +234,7 @@ void loop() {
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
     // checkSignal();
-    Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() , soc);
+    Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() ,soc);
     configCharger(true);
     if (soc > minBatteryLevel) {
         if (ExtTemp >= minPublishTemp) {
@@ -265,6 +266,14 @@ void loop() {
     Log.info("(loop) Wake-up on: " + Time.timeStr() + ", WakeCount= %d", wakeCount);             // Log wakup time
 }
 
+void initSI7051(){
+    Wire1.begin();
+    Wire1.beginTransmission(0x40);
+    Wire1.write(0xE6);
+    Wire1.write(0x0);
+    Wire1.endTransmission();
+}
+
 // ***************************************************************
 // Determine sleep time and mode
 // ***************************************************************
@@ -279,8 +288,9 @@ void goToSleep(int sleepType) {
             // Normal sleep i.e. STOP Mode sleep
             // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
             dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
-            if (dt > 300 ){
-                dt = 3000UL;
+            Log.info("(loop) dt= %lu seconds", dt);
+            if (dt > 300UL){
+                dt = 300UL;
             }
             Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
             delay(5000UL);
@@ -400,6 +410,25 @@ float readThermistor(int NSamples, int interval, String SelectThermistor) {
     return temp;
 }
 
+// ***************************************************************
+// readSI7051: Read the SI7051 chip and log the temperature
+// ***************************************************************
+float readSI7051(){
+    Wire1.beginTransmission(0x40);
+    Wire1.write(0xF3); //calling for Si7051 to make a temperature measurement
+    Wire1.endTransmission();
+
+    delay(15); //14 bit temperature conversion needs 10+ms time to complete.
+
+    Wire1.requestFrom(0x40, (uint8_t)2);
+    delay(25);
+    byte msb = Wire1.read();
+    byte lsb = Wire1.read();
+    uint16_t val = msb << 8 | lsb;
+    float temperature = (175.72*val) / 65536 - 46.85;
+    Log.info("(readSI7051) Si7051 Temperature: %.2f", temperature);
+    return temperature;
+}
 // ***************************************************************
 // Read and average vacuum readings
 // ***************************************************************
@@ -586,6 +615,7 @@ void syncCloudTime() {
 void configCharger(bool mode) {
     PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
     BatteryTemp = readThermistor(NUMSAMPLES, 1, "Bat");
+    readSI7051();
     // Mode true: normal operation
     if (mode == true) {
         pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
