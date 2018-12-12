@@ -52,7 +52,7 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.15";             // Version of this firmware.
+String FirmwareVersion = "0.8.16";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -108,7 +108,7 @@ String myID;                                  // Device Id
 
 // Light sensor parameters and variable definitions
 #define LOADRESISTOR 51000UL                  // Resistor used to convert current to voltage on the light sensor
-int lightSensorPowerPin = D0;
+int lightSensorEnablePin = D0;
 int lightSensorInputPin = A5;
 float lightIntensityLux = 0;
 
@@ -172,7 +172,7 @@ void setup() {
     Log.info("(setup) Firmware date: " + FirmwareDate);
     Time.zone(-5);
     pinMode(vacuum5VoltsEnablePin, OUTPUT);        // Put all control pins in output mode
-    pinMode(lightSensorPowerPin, OUTPUT);
+    pinMode(lightSensorEnablePin, OUTPUT);
     pinMode(thermistorPowerPin, OUTPUT);
     pinMode(BLUE_LED, OUTPUT);
     pinMode(wakeupPin, INPUT_PULLUP);
@@ -279,7 +279,8 @@ void initSI7051(){
 // ***************************************************************
 void goToSleep(int sleepType) {
     unsigned long  dt = 0;
-    RGB.mirrorDisable();                                 // Disable RGB LED mirroring
+    digitalWrite(lightSensorEnablePin, true);                           // Turn OFF the light sensor
+    RGB.mirrorDisable();                                                // Disable RGB LED mirroring
     Particle.process();
 
     switch (sleepType)
@@ -293,7 +294,7 @@ void goToSleep(int sleepType) {
                 dt = 300UL;
             }
             Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
-            delay(5000UL);
+            delay(2000UL);
             System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
             break;
 
@@ -301,7 +302,7 @@ void goToSleep(int sleepType) {
             // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
             Log.info("(goToSleep) Battery below %0.1f percent. Deep sleep for one hour.", minBatteryLevel);
             Particle.disconnect();
-            delay(5000UL);
+            delay(2000UL);
             System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
             break;
 
@@ -309,7 +310,7 @@ void goToSleep(int sleepType) {
             // Two minutes retry sleep
             Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
             Particle.disconnect();
-            delay(5000UL);
+            delay(2000UL);
             System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
             break;
 
@@ -325,15 +326,15 @@ void goToSleep(int sleepType) {
                 dt = NIGHT_SLEEP_LENGTH_HR * 60 * 60;
             }
             Log.info("(goToSleep) dt = %d", dt);
-            System.sleep(SLEEP_MODE_DEEP, dt);                // Deep sleep for the night
-            delay(2000UL); // Try to fix the no wake-up problem
+            System.sleep(SLEEP_MODE_DEEP, dt);                          // Deep sleep for the night
             break;
     }
 
     // wake-up time
     wakeup_time = millis();
-    RGB.mirrorTo(B1, B0, B2, true);                         // Enable RGB LED mirroring
-    for (int i=0; i<30; i++) { // Gives 3 seconds to system
+    digitalWrite(lightSensorEnablePin, false);                          // Turn ON the light sensor
+    RGB.mirrorTo(B1, B0, B2, true);                                     // Enable RGB LED mirroring
+    for (int i=0; i<30; i++) {                                          // Gives 3 seconds to system
         Particle.process();
         delay(100);
     }
@@ -429,6 +430,7 @@ float readSI7051(){
     Log.info("(readSI7051) Si7051 Temperature: %.2f", temperature);
     return temperature;
 }
+
 // ***************************************************************
 // Read and average vacuum readings
 // ***************************************************************
@@ -486,12 +488,10 @@ double VacRaw2inHg(float raw) {
 float readLightIntensitySensor() {
     float lightRawValue;
     float lightIntensity;
-    digitalWrite(lightSensorPowerPin, true);                            // Turn ON the light sensor Power
     lightRawValue = AverageReadings(lightSensorInputPin, NUMSAMPLES, 10); // Average multiple raw readings to reduce noise
     Log.trace("(readLightIntensitySensor) lightRawValue = %.0f", lightRawValue);                   // Log raw data at trace level for debugging
     lightIntensity = LightRaw2Lux(lightRawValue);                       // Convert to Lux
     Log.info("(readLightIntensitySensor) Light int. = %.0f Lux", lightIntensity);                  // Log final value at info level
-    digitalWrite(lightSensorPowerPin, false);                           // Turn OFF the light sensor
     return lightIntensity;
 }
 
