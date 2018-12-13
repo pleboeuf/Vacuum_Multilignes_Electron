@@ -47,12 +47,12 @@ Sleep duration: See #define SLEEPTIMEinMINUTES
 #include "math.h"
 #include "photon-thermistor.h"
 
-SYSTEM_MODE(SEMI_AUTOMATIC);
+SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.16";             // Version of this firmware.
+String FirmwareVersion = "0.8.23";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -68,7 +68,8 @@ String myNameIs = "";
 #define NIGHT_SLEEP_START_HR 21               // Sleep for the night beginning at 19h00
 #define NIGHT_SLEEP_START_MIN 00              // Sleep for the night beginning at 19h00
 #define NIGHT_SLEEP_LENGTH_HR 10              // Night sleep duration in hours
-#define TimeBoundaryOffset -9                 // wake-up at time boundary plus some seconds
+#define TOO_COLD_SLEEP_IN_SECONDs 10 * 60     //
+#define TimeBoundaryOffset - 0                // wake-up at time boundary plus some seconds
 #define WatchDogTimeout 480000UL              // Watch Dog Timeaout delay
 
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
@@ -97,13 +98,13 @@ int Ext_thermistorInputPin = A4;
 int Bat_thermistorInputPin = B5;
 int VinPin = A6;
 
-enum sleepTypeDef {SLEEP_NORMAL, SLEEP_LOW_BATTERY, SLEEP_TWO_MINUTES, SLEEP_All_NIGHT};
+enum sleepTypeDef {SLEEP_NORMAL, SLEEP_LOW_BATTERY, SLEEP_TWO_MINUTES, SLEEP_TOO_COLD, SLEEP_All_NIGHT};
 enum chState {off, lowCurrent, highCurrent, unknown};
 chState chargerStatus = unknown;
 
 float ExtTemp = 0;
 float BatteryTemp = 0;
-float minPublishTemp = -5;                    // Do not publish below -5
+float minPublishTemp = 5;                    // Do not publish below 5 (pour tes. normalement -5)
 String myID;                                  // Device Id
 
 // Light sensor parameters and variable definitions
@@ -190,16 +191,15 @@ void setup() {
     initSI7051();
     ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");              // First check the temperature
     BatteryTemp = readThermistor(NUMSAMPLES, 1, "Bat");
-    Log.info("\n(setup) Battery boot voltage: %0.3f ,charge level: %0.2f, and temperature: %0.1f", Vbat, soc, BatteryTemp);
+    Log.info("(setup) Battery boot voltage: %0.3f ,charge level: %0.2f, and temperature: %0.1f", Vbat, soc, BatteryTemp);
     configCharger(true);
-    if (soc > minBatteryLevel && ExtTemp >= minPublishTemp) {
+    if (soc > minBatteryLevel) {
         Log.info("(setup) Connecting to tower and cloud.");
         Particle.connect();
         if (waitFor(Particle.connected, maxConnectTime * 1000UL)) {
             Particle.process();
             if (Particle.connected()) {
                 Log.info("(setup) Cloud connected! - " + Time.timeStr());
-                // while (Time.year() < 2018 || Time.year() > 2050) // Make sure the time is valid
                 if (not(Time.isValid())) {
                     Log.info("(setup) Syncing time ");
                     Particle.syncTime();
@@ -209,7 +209,7 @@ void setup() {
                 newGenTimestamp = Time.now();
                 Log.info("(setup) Setup Completed");
             } else {
-                Log.warn("(setup) Failed to connect! Try again in 5 miutes");
+                Log.warn("(setup) Failed to connect! Try again in 2 miutes");
                 restartCount++;
                 Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f\%, Vbat: %.3f", restartCount, soc, Vbat);
                 goToSleep(SLEEP_TWO_MINUTES);
@@ -251,6 +251,9 @@ void loop() {
             } else {
                 goToSleep(SLEEP_NORMAL);
             }                                                             // Finally read the 4 vacuum transducers
+        } else {
+            Log.info("(loop) Too cold to publish");
+            goToSleep(SLEEP_TOO_COLD);
         }
     } else {
         // else SLEEP the Electron for an hour to recharge the battery
@@ -282,15 +285,15 @@ void goToSleep(int sleepType) {
     digitalWrite(lightSensorEnablePin, true);                           // Turn OFF the light sensor
     RGB.mirrorDisable();                                                // Disable RGB LED mirroring
     Particle.process();
-
+    Log.info("(goToSleep) Sleep type:= %d", sleepType);
     switch (sleepType)
     {
         case SLEEP_NORMAL:
             // Normal sleep i.e. STOP Mode sleep
             // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
             dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
-            Log.info("(loop) dt= %lu seconds", dt);
-            if (dt > 300UL){
+            Log.info("(goToSleep) dt= %lu seconds", dt);
+            if (dt > 360UL){
                 dt = 300UL;
             }
             Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
@@ -312,6 +315,20 @@ void goToSleep(int sleepType) {
             Particle.disconnect();
             delay(2000UL);
             System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
+            break;
+
+        case SLEEP_TOO_COLD:
+            // Wait until its warmer
+            dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
+            if (dt > 360UL){
+                dt = 300UL;
+            }
+            Log.info("(goToSleep) Too cold to publish. Try again in one hour.", minBatteryLevel);
+            // if (Particle.connected()){
+            //     Particle.disconnect();
+            // }
+            delay(2000UL);
+            System.sleep(wakeupPin, FALLING, dt); // Low power mode
             break;
 
         case SLEEP_All_NIGHT:
