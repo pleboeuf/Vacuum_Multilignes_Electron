@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.23";             // Version of this firmware.
+String FirmwareVersion = "0.8.26";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -231,36 +231,35 @@ void loop() {
     bool vacChanged = false;
     ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");                      // First check the temperature
     // Do not publish if its too cold or charge is lower than 20%
-    soc = fuel.getSoC();
-    Vbat = fuel.getVCell();
-    // checkSignal();
-    Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() ,soc);
     configCharger(true);
-    if (soc > minBatteryLevel) {
-        if (ExtTemp >= minPublishTemp) {
-            vacChanged = readVacuums();                                   // Then VacuumPublishLimits
-            lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
-            String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
-            Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
-                     "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, signalRSSI, signalQuality);
-            if (wakeCount == WakeCountToPublish || vacChanged) {
-                publishData();                                            // Publish a message the data
-            }
-            if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
-                goToSleep(SLEEP_All_NIGHT);
-            } else {
-                goToSleep(SLEEP_NORMAL);
-            }                                                             // Finally read the 4 vacuum transducers
-        } else {
-            Log.info("(loop) Too cold to publish");
-            goToSleep(SLEEP_TOO_COLD);
-        }
-    } else {
-        // else SLEEP the Electron for an hour to recharge the battery
-        restartCount++;
-        Log.warn("\n(loop) LOOP Restart. Count: %d, battery: %.1f", restartCount, fuel.getSoC());
-        goToSleep(SLEEP_LOW_BATTERY);
+    if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
+        goToSleep(SLEEP_All_NIGHT);
     }
+    if (ExtTemp >= minPublishTemp) {
+        soc = fuel.getSoC();
+        Vbat = fuel.getVCell();
+        // Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() ,soc);
+        if (soc < minBatteryLevel) {
+            // SLEEP the Electron for an hour to recharge the battery
+            restartCount++;
+            Log.warn("\n(loop) LOOP Restart. Count: %d, battery: %.1f", restartCount, soc);
+            goToSleep(SLEEP_LOW_BATTERY);
+        }
+        vacChanged = readVacuums();                                   // Then VacuumPublishLimits
+        lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
+        String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
+        Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
+                 "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, signalRSSI, signalQuality);
+        if (wakeCount == WakeCountToPublish || vacChanged) {
+            publishData();                                            // Publish a message the data
+        }
+        goToSleep(SLEEP_NORMAL);
+                                                                    // Finally read the 4 vacuum transducers
+    } else {
+        Log.info("(loop) Too cold to publish");
+        goToSleep(SLEEP_TOO_COLD);
+    }
+
     wakeCount++;
     if (wakeCount > WakeCountToPublish) {
         wakeCount = 0;
@@ -304,7 +303,7 @@ void goToSleep(int sleepType) {
         case SLEEP_LOW_BATTERY:
             // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
             Log.info("(goToSleep) Battery below %0.1f percent. Deep sleep for one hour.", minBatteryLevel);
-            Particle.disconnect();
+            // Particle.disconnect();
             delay(2000UL);
             System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
             break;
@@ -323,10 +322,12 @@ void goToSleep(int sleepType) {
             if (dt > 360UL){
                 dt = 300UL;
             }
-            Log.info("(goToSleep) Too cold to publish. Try again in one hour.", minBatteryLevel);
-            // if (Particle.connected()){
-            //     Particle.disconnect();
-            // }
+            Log.info("(goToSleep) Too cold to publish. Try again in %d minutes.", SLEEPTIMEinMINUTES);
+            if (Particle.connected()){
+                Particle.disconnect();
+                Cellular.disconnect();
+                Cellular.off();
+            }
             delay(2000UL);
             System.sleep(wakeupPin, FALLING, dt); // Low power mode
             break;
@@ -635,10 +636,10 @@ void configCharger(bool mode) {
     readSI7051();
     // Mode true: normal operation
     if (mode == true) {
-        pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
         if (BatteryTemp <= 1.0 or BatteryTemp >= 45.0) {
             if (chargerStatus != off) {
                 // Disable charger to protect the battery
+                pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
                 pmic.setChargeCurrent(0,0,0,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
                 pmic.disableCharging();
                 chargerStatus = off;
@@ -647,6 +648,7 @@ void configCharger(bool mode) {
         } else if (BatteryTemp <= 5.0) {
             if (chargerStatus != lowCurrent) {
                 // Reduce the charge current
+                pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
                 pmic.setChargeCurrent(0,0,0,0,0,1); //Set charging current to 1024mA (512 + 512 offset)
                 pmic.enableCharging();
                 chargerStatus = lowCurrent;
@@ -655,6 +657,7 @@ void configCharger(bool mode) {
         } else {
             if (chargerStatus != highCurrent) {
                 // Charge at full current
+                pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
                 pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
                 chargerStatus = highCurrent;
                 pmic.enableCharging();
@@ -665,6 +668,7 @@ void configCharger(bool mode) {
         // Mode false: Disable charger to protect the battery for night sleep
         if (chargerStatus != off) {
             // Disable charger to protect the battery
+            pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
             pmic.setChargeCurrent(0,0,0,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
             pmic.disableCharging();
             chargerStatus = off;
