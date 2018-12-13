@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.26";             // Version of this firmware.
+String FirmwareVersion = "0.8.27";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -229,22 +229,25 @@ void setup() {
 // ***************************************************************
 void loop() {
     bool vacChanged = false;
-    ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");                      // First check the temperature
-    // Do not publish if its too cold or charge is lower than 20%
+
+    soc = fuel.getSoC();
+    Vbat = fuel.getVCell();
+    Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() ,soc);
+    if (soc < minBatteryLevel) {
+        // SLEEP the Electron for an hour to recharge the battery
+        restartCount++;
+        Log.warn("\n(loop) LOOP Restart. Count: %d, battery: %.1f", restartCount, soc);
+        goToSleep(SLEEP_LOW_BATTERY);
+    }
     configCharger(true);
+
     if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
         goToSleep(SLEEP_All_NIGHT);
     }
+
+    ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");                      // First check the temperature
+    // Do not publish if its too cold or charge is lower than 20%
     if (ExtTemp >= minPublishTemp) {
-        soc = fuel.getSoC();
-        Vbat = fuel.getVCell();
-        // Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() ,soc);
-        if (soc < minBatteryLevel) {
-            // SLEEP the Electron for an hour to recharge the battery
-            restartCount++;
-            Log.warn("\n(loop) LOOP Restart. Count: %d, battery: %.1f", restartCount, soc);
-            goToSleep(SLEEP_LOW_BATTERY);
-        }
         vacChanged = readVacuums();                                   // Then VacuumPublishLimits
         lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
         String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
