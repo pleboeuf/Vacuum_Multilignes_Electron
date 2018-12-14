@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.27";             // Version of this firmware.
+String FirmwareVersion = "0.8.29";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -104,7 +104,7 @@ chState chargerStatus = unknown;
 
 float ExtTemp = 0;
 float BatteryTemp = 0;
-float minPublishTemp = 5;                    // Do not publish below 5 (pour tes. normalement -5)
+float minPublishTemp = 5;                     // Do not publish below 5 (pour tes. normalement -3)
 String myID;                                  // Device Id
 
 // Light sensor parameters and variable definitions
@@ -325,7 +325,7 @@ void goToSleep(int sleepType) {
             if (dt > 360UL){
                 dt = 300UL;
             }
-            Log.info("(goToSleep) Too cold to publish. Try again in %d minutes.", SLEEPTIMEinMINUTES);
+            Log.info("(goToSleep) Too cold to publish. Try again in %d seconds.", dt);
             if (Particle.connected()){
                 Particle.disconnect();
                 Cellular.disconnect();
@@ -342,12 +342,19 @@ void goToSleep(int sleepType) {
             unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_LENGTH_HR * 60;
             dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
             configCharger(false);
+            Log.info("(goToSleep) Go to sleep at : " + Time.timeStr());
             Log.info("(goToSleep) dt = %d", dt);
             if (dt > NIGHT_SLEEP_LENGTH_HR * 60 * 60 ){
                 dt = NIGHT_SLEEP_LENGTH_HR * 60 * 60;
             }
             Log.info("(goToSleep) dt = %d", dt);
-            System.sleep(SLEEP_MODE_DEEP, dt);                          // Deep sleep for the night
+            if (Particle.connected()){
+                Particle.disconnect();
+                Cellular.disconnect();
+                Cellular.off();
+            }
+            delay(2000UL);
+            System.sleep(wakeupPin, FALLING, dt); // Low power mode
             break;
     }
 
