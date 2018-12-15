@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.29";             // Version of this firmware.
+String FirmwareVersion = "0.8.30";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -104,7 +104,7 @@ chState chargerStatus = unknown;
 
 float ExtTemp = 0;
 float BatteryTemp = 0;
-float minPublishTemp = 5;                     // Do not publish below 5 (pour tes. normalement -3)
+float minPublishTemp = 0;                     // Do not publish below 5 (pour tes. normalement -3)
 String myID;                                  // Device Id
 
 // Light sensor parameters and variable definitions
@@ -233,6 +233,7 @@ void loop() {
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
     Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() ,soc);
+    // Do not publish if charge is lower than 20%
     if (soc < minBatteryLevel) {
         // SLEEP the Electron for an hour to recharge the battery
         restartCount++;
@@ -246,8 +247,8 @@ void loop() {
     }
 
     ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");                      // First check the temperature
-    // Do not publish if its too cold or charge is lower than 20%
-    if (ExtTemp >= minPublishTemp) {
+    // Publish when external temperature is above the minPublishTemp + 0.5°C
+    if (ExtTemp >= minPublishTemp + 0.5) {
         vacChanged = readVacuums();                                   // Then VacuumPublishLimits
         lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
         String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
@@ -257,10 +258,27 @@ void loop() {
             publishData();                                            // Publish a message the data
         }
         goToSleep(SLEEP_NORMAL);
-                                                                    // Finally read the 4 vacuum transducers
-    } else {
+        // Stop Publish when external temperature is below the minPublishTemp - 0.5°C and enter low power sleep mode
+    } else if (ExtTemp <= minPublishTemp - 0.5){
         Log.info("(loop) Too cold to publish");
         goToSleep(SLEEP_TOO_COLD);
+    } else {
+        if (Particle.connected()) {
+            // Keep Publishing when close to minPublishTemp if the connection was already established
+            vacChanged = readVacuums();                                   // Then VacuumPublishLimits
+            lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
+            String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
+            Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
+                     "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, signalRSSI, signalQuality);
+            if (wakeCount == WakeCountToPublish || vacChanged) {
+                publishData();                                            // Publish a message the data
+            }
+            goToSleep(SLEEP_NORMAL);
+        } else {
+            // Keep the low power mode when close to minPublishTemp if the connection was already disconnected
+        Log.info("(loop) Too cold to publish");
+            goToSleep(SLEEP_TOO_COLD);
+        }
     }
 
     wakeCount++;
