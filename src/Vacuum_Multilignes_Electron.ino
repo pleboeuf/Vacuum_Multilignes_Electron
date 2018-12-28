@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.30";             // Version of this firmware.
+String FirmwareVersion = "0.8.31";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -88,6 +88,7 @@ String myNameIs = "";
 #define BCOEFFICIENT 3470                     // The beta coefficient at 0 degrees of the thermistor (nominal is 3435 (25/85))
 #define SERIESRESISTOR 10000UL                // the value of the resistor in serie with the thermistor
 #define THERMISTORNOMINAL 10000UL             // thermistor resistance at 25 degrees C
+#define THERMISTOROFFSET 2.7                  // Offset observed when reading the thermistor
 
 float minBatteryLevel = 30.0;                    // Sleep unless battery is above this level
 
@@ -153,6 +154,7 @@ retained int restartCount = 0;
 int wakeCount = 0;
 retained int FailCount = 0;
 // int FailCount = 0;
+retained int SigSystemResetCount = 0;
 FuelGauge fuel;
 float soc = 0;
 float Vbat = 0;
@@ -189,8 +191,8 @@ void setup() {
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
     initSI7051();
-    ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");              // First check the temperature
-    BatteryTemp = readThermistor(NUMSAMPLES, 1, "Bat");
+    ExtTemp = readThermistor(1, 1, "Ext");              // First check the temperature
+    BatteryTemp = readThermistor(1, 1, "Bat");
     Log.info("(setup) Battery boot voltage: %0.3f ,charge level: %0.2f, and temperature: %0.1f", Vbat, soc, BatteryTemp);
     configCharger(true);
     if (soc > minBatteryLevel) {
@@ -207,6 +209,7 @@ void setup() {
                     Log.info("(setup) syncTimeDone " + Time.timeStr());
                 }
                 newGenTimestamp = Time.now();
+                SigSystemResetCount = 0;
                 Log.info("(setup) Setup Completed");
             } else {
                 Log.warn("(setup) Failed to connect! Try again in 2 miutes");
@@ -246,7 +249,9 @@ void loop() {
         goToSleep(SLEEP_All_NIGHT);
     }
 
-    ExtTemp = readThermistor(NUMSAMPLES, 1, "Ext");                      // First check the temperature
+    ExtTemp = readThermistor(1, 1, "Ext");                      // First check the temperature
+    lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
+    String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
     // Publish when external temperature is above the minPublishTemp + 0.5°C
     if (ExtTemp >= minPublishTemp + 0.5) {
         vacChanged = readVacuums();                                   // Then VacuumPublishLimits
@@ -261,13 +266,13 @@ void loop() {
         // Stop Publish when external temperature is below the minPublishTemp - 0.5°C and enter low power sleep mode
     } else if (ExtTemp <= minPublishTemp - 0.5){
         Log.info("(loop) Too cold to publish");
+        Log.info("(loop) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatteryTemp, SI7051 :\t" + timeNow +
+                 "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
         goToSleep(SLEEP_TOO_COLD);
     } else {
         if (Particle.connected()) {
             // Keep Publishing when close to minPublishTemp if the connection was already established
             vacChanged = readVacuums();                                   // Then VacuumPublishLimits
-            lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
-            String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
             Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
                      "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, signalRSSI, signalQuality);
             if (wakeCount == WakeCountToPublish || vacChanged) {
@@ -418,6 +423,7 @@ bool publishData() {
             Log.info("(publishData) Published success!");
             // Log.info("(publishData) Incrementing noSerie now");
             noSerie++;
+            SigSystemResetCount = 0;
         } else {
             FailCount++;
             Log.warn("(publishData) Published fail! Count: %d :(", FailCount);
@@ -447,7 +453,7 @@ float readThermistor(int NSamples, int interval, String SelectThermistor) {
             sum += battery_thermistor->readTempC(); // Read temperature and accumulate the readings
         }
     }
-    temp = sum / NSamples;          // Average the readings
+    temp = (sum / NSamples) + THERMISTOROFFSET;     // Average the readings and correct the offset
     if (SelectThermistor == "Ext") {
         Log.info("(readThermistor) Temperature Ext. = %.1f°C", temp); // Log final value at info level
     } else {
@@ -617,8 +623,11 @@ bool checkSignal() {
     if (sig.rssi == 0 || sig.qual == 0){
         Log.info("(checkSignal) NETWORK CONNECTION LOST!!");
         delay(2000UL);
-        System.reset();
-        // return false;
+        if (SigSystemResetCount <= 3){
+            SigSystemResetCount++;
+            System.reset();
+        }
+        return false;
     } else if (sig.rssi == 1){
         Log.info("(checkSignal) Cellular module or time-out error");
         return false;
@@ -660,7 +669,7 @@ void syncCloudTime() {
 
 void configCharger(bool mode) {
     PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
-    BatteryTemp = readThermistor(NUMSAMPLES, 1, "Bat");
+    BatteryTemp = readThermistor(1, 1, "Bat");
     readSI7051();
     // Mode true: normal operation
     if (mode == true) {
