@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.31";             // Version of this firmware.
+String FirmwareVersion = "0.8.32";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -88,7 +88,7 @@ String myNameIs = "";
 #define BCOEFFICIENT 3470                     // The beta coefficient at 0 degrees of the thermistor (nominal is 3435 (25/85))
 #define SERIESRESISTOR 10000UL                // the value of the resistor in serie with the thermistor
 #define THERMISTORNOMINAL 10000UL             // thermistor resistance at 25 degrees C
-#define THERMISTOROFFSET 2.7                  // Offset observed when reading the thermistor
+#define THERMISTOROFFSET 2.5                  // Offset observed when reading the thermistor
 
 float minBatteryLevel = 30.0;                    // Sleep unless battery is above this level
 
@@ -257,8 +257,10 @@ void loop() {
         vacChanged = readVacuums();                                   // Then VacuumPublishLimits
         lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
         String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
-        Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
-                 "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, signalRSSI, signalQuality);
+        Log.info("(loop) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatteryTemp, SI7051 :\t" + timeNow +
+                 "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
+        // Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
+        //          "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, signalRSSI, signalQuality);
         if (wakeCount == WakeCountToPublish || vacChanged) {
             publishData();                                            // Publish a message the data
         }
@@ -273,8 +275,8 @@ void loop() {
         if (Particle.connected()) {
             // Keep Publishing when close to minPublishTemp if the connection was already established
             vacChanged = readVacuums();                                   // Then VacuumPublishLimits
-            Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
-                     "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, signalRSSI, signalQuality);
+            Log.info("(loop) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatteryTemp, SI7051 :\t" + timeNow +
+                     "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
             if (wakeCount == WakeCountToPublish || vacChanged) {
                 publishData();                                            // Publish a message the data
             }
@@ -479,7 +481,7 @@ float readSI7051(){
     byte lsb = Wire1.read();
     uint16_t val = msb << 8 | lsb;
     float temperature = (175.72*val) / 65536 - 46.85;
-    Log.info("(readSI7051) Si7051 Temperature: %.2f", temperature);
+    Log.info("(readSI7051) Si7051 Temperature: %.2f°C", temperature);
     return temperature;
 }
 
