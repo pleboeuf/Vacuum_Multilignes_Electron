@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.8.32";             // Version of this firmware.
+String FirmwareVersion = "0.9.01";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -158,6 +158,8 @@ retained int SigSystemResetCount = 0;
 FuelGauge fuel;
 float soc = 0;
 float Vbat = 0;
+bool updateDisponible = false;
+int updateCounter = 10;
 
 /* Define a log handler on Serial1 for log messages */
 Serial1LogHandler log1Handler(115200, LOG_LEVEL_TRACE, {   // Logging level for non-application messages
@@ -195,6 +197,7 @@ void setup() {
     BatteryTemp = readThermistor(1, 1, "Bat");
     Log.info("(setup) Battery boot voltage: %0.3f ,charge level: %0.2f, and temperature: %0.1f", Vbat, soc, BatteryTemp);
     configCharger(true);
+    Particle.subscribe("UpdateAvailable", my_Handler, MY_DEVICES);
     if (soc > minBatteryLevel) {
         Log.info("(setup) Connecting to tower and cloud.");
         Particle.connect();
@@ -232,10 +235,13 @@ void setup() {
 // ***************************************************************
 void loop() {
     bool vacChanged = false;
-
+    // First check battery state, external temperature and battery temperature (through the configCharger routine)
     soc = fuel.getSoC();
     Vbat = fuel.getVCell();
     Log.info("(loop) Vin: %.2f, Battery level %0.1f",readVin() ,soc);
+    ExtTemp = readThermistor(1, 1, "Ext");
+    configCharger(true);
+
     // Do not publish if charge is lower than 20%
     if (soc < minBatteryLevel) {
         // SLEEP the Electron for an hour to recharge the battery
@@ -243,48 +249,36 @@ void loop() {
         Log.warn("\n(loop) LOOP Restart. Count: %d, battery: %.1f", restartCount, soc);
         goToSleep(SLEEP_LOW_BATTERY);
     }
-    configCharger(true);
-
+    // Check if its time for night sleep
     if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
         goToSleep(SLEEP_All_NIGHT);
     }
 
-    ExtTemp = readThermistor(1, 1, "Ext");                      // First check the temperature
-    lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
-    String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
-    // Publish when external temperature is above the minPublishTemp + 0.5°C
+    // Start Publish when external temperature is above the minPublishTemp + 0.5°C and enter low power sleep mode
     if (ExtTemp >= minPublishTemp + 0.5) {
-        vacChanged = readVacuums();                                   // Then VacuumPublishLimits
-        lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
-        String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
-        Log.info("(loop) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatteryTemp, SI7051 :\t" + timeNow +
-                 "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
-        // Log.info("(loop) Summary: Time, Li, Vin, Vbat, SOC, Temp°C, RSSI, Qual:\t"+ timeNow +
-        //          "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%d\t%d", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, signalRSSI, signalQuality);
+        vacChanged = readVacuums();
         if (wakeCount == WakeCountToPublish || vacChanged) {
-            publishData();                                            // Publish a message the data
+            publishData();
         }
         goToSleep(SLEEP_NORMAL);
-        // Stop Publish when external temperature is below the minPublishTemp - 0.5°C and enter low power sleep mode
+
+    // Stop Publish when external temperature is below the minPublishTemp - 0.5°C and enter low power sleep mode
     } else if (ExtTemp <= minPublishTemp - 0.5){
         Log.info("(loop) Too cold to publish");
-        Log.info("(loop) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatteryTemp, SI7051 :\t" + timeNow +
-                 "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
         goToSleep(SLEEP_TOO_COLD);
+
     } else {
         if (Particle.connected()) {
             // Keep Publishing when close to minPublishTemp if the connection was already established
             vacChanged = readVacuums();                                   // Then VacuumPublishLimits
-            Log.info("(loop) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatteryTemp, SI7051 :\t" + timeNow +
-                     "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
             if (wakeCount == WakeCountToPublish || vacChanged) {
                 publishData();                                            // Publish a message the data
             }
             goToSleep(SLEEP_NORMAL);
         } else {
-            // Keep the low power mode when close to minPublishTemp if the connection was already disconnected
+        // Keep the low power mode when close to minPublishTemp if the connection was already disconnected
         Log.info("(loop) Too cold to publish");
-            goToSleep(SLEEP_TOO_COLD);
+        goToSleep(SLEEP_TOO_COLD);
         }
     }
 
@@ -294,6 +288,12 @@ void loop() {
     }
     Log.info(" ");
     Log.info("(loop) Wake-up on: " + Time.timeStr() + ", WakeCount= %d", wakeCount);             // Log wakup time
+}
+
+void my_Handler(const char *event, const char *data){
+    updateDisponible = true;
+    updateCounter = 12;
+    Log.info("(my_Handler) Software update available. updateCounter = %d", updateCounter);
 }
 
 void initSI7051(){
@@ -308,9 +308,16 @@ void initSI7051(){
 // Determine sleep time and mode
 // ***************************************************************
 void goToSleep(int sleepType) {
+    // Log info for debugging before going to sleep
+    lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
+    String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
+    Log.info("(goToSleep) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatteryTemp, SI7051 :\t" + timeNow +
+             "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
+
+    // Disable light intensity sensor and RGB LED mirroring
     unsigned long  dt = 0;
-    digitalWrite(lightSensorEnablePin, true);                           // Turn OFF the light sensor
-    RGB.mirrorDisable();                                                // Disable RGB LED mirroring
+    digitalWrite(lightSensorEnablePin, true);
+    RGB.mirrorDisable();
     Particle.process();
     Log.info("(goToSleep) Sleep type:= %d", sleepType);
     switch (sleepType)
@@ -323,6 +330,14 @@ void goToSleep(int sleepType) {
             if (dt > 360UL){
                 dt = 300UL;
             }
+            if (updateDisponible) {
+                dt = dt - 60;
+                if (updateCounter-- <= 0){
+                    updateDisponible = false;
+                }
+                Log.info("(goToSleep) Software update available. updateCounter = %d", updateCounter);
+                delay (60000UL); //Stay awake for a minute to gives time for the update
+            }
             Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
             delay(2000UL);
             System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
@@ -333,7 +348,7 @@ void goToSleep(int sleepType) {
             Log.info("(goToSleep) Battery below %0.1f percent. Deep sleep for one hour.", minBatteryLevel);
             // Particle.disconnect();
             delay(2000UL);
-            System.sleep(SLEEP_MODE_DEEP, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+            System.sleep(wakeupPin, FALLING, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
             break;
 
         case SLEEP_TWO_MINUTES:
@@ -366,6 +381,7 @@ void goToSleep(int sleepType) {
             delay(2000UL);
             unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_LENGTH_HR * 60;
             dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+            // Disable the charger before night sleep
             configCharger(false);
             Log.info("(goToSleep) Go to sleep at : " + Time.timeStr());
             Log.info("(goToSleep) dt = %d", dt);
@@ -675,7 +691,7 @@ void configCharger(bool mode) {
     readSI7051();
     // Mode true: normal operation
     if (mode == true) {
-        if (BatteryTemp <= 1.0 or BatteryTemp >= 45.0) {
+        if (BatteryTemp <= 1.0 or BatteryTemp >= 40.0) {
             if (chargerStatus != off) {
                 // Disable charger to protect the battery
                 pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
