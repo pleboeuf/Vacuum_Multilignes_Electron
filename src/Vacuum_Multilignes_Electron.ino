@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.9.01";             // Version of this firmware.
+String FirmwareVersion = "0.9.03";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -311,7 +311,7 @@ void goToSleep(int sleepType) {
     // Log info for debugging before going to sleep
     lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
     String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
-    Log.info("(goToSleep) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatteryTemp, SI7051 :\t" + timeNow +
+    Log.info("(goToSleep) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatTemp, SI7051 :\t" + timeNow +
              "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
 
     // Disable light intensity sensor and RGB LED mirroring
@@ -319,14 +319,12 @@ void goToSleep(int sleepType) {
     digitalWrite(lightSensorEnablePin, true);
     RGB.mirrorDisable();
     Particle.process();
-    Log.info("(goToSleep) Sleep type:= %d", sleepType);
     switch (sleepType)
     {
         case SLEEP_NORMAL:
             // Normal sleep i.e. STOP Mode sleep
             // sleeps duration corrected to next time boundary + TimeBoundaryOffset seconds
             dt = (SLEEPTIMEinMINUTES - Time.minute() % SLEEPTIMEinMINUTES) * 60 - Time.second() + TimeBoundaryOffset;
-            Log.info("(goToSleep) dt= %lu seconds", dt);
             if (dt > 360UL){
                 dt = 300UL;
             }
@@ -335,17 +333,17 @@ void goToSleep(int sleepType) {
                 if (updateCounter-- <= 0){
                     updateDisponible = false;
                 }
-                Log.info("(goToSleep) Software update available. updateCounter = %d", updateCounter);
+                Log.info("(goToSleep) OTA available. updateCounter = %d", updateCounter);
                 delay (60000UL); //Stay awake for a minute to gives time for the update
             }
-            Log.info("(loop) Going to STOP Mode sleep for %lu seconds", dt);
+            Log.info("(goToSleep) 'SLEEP_NORMAL' for %lu seconds", dt);
             delay(2000UL);
             System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
             break;
 
         case SLEEP_LOW_BATTERY:
             // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-            Log.info("(goToSleep) Battery below %0.1f percent. Deep sleep for one hour.", minBatteryLevel);
+            Log.info("(goToSleep) 'SLEEP_LOW_BATTERY' - Battery below %0.1f percent. Sleep for one hour.", minBatteryLevel);
             // Particle.disconnect();
             delay(2000UL);
             System.sleep(wakeupPin, FALLING, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
@@ -353,7 +351,7 @@ void goToSleep(int sleepType) {
 
         case SLEEP_TWO_MINUTES:
             // Two minutes retry sleep
-            Log.info("(goToSleep) Difficulty connecting to the cloud. Resetting in 2 minutes.");
+            Log.info("(goToSleep) 'SLEEP_TWO_MINUTES' - Difficulty connecting to the cloud. Resetting in 2 minutes.");
             Particle.disconnect();
             delay(2000UL);
             System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
@@ -365,7 +363,7 @@ void goToSleep(int sleepType) {
             if (dt > 360UL){
                 dt = 300UL;
             }
-            Log.info("(goToSleep) Too cold to publish. Try again in %d seconds.", dt);
+            Log.info("(goToSleep) 'SLEEP_TOO_COLD' - Too cold to publish. Try again in %d seconds.", dt);
             if (Particle.connected()){
                 Particle.disconnect();
                 Cellular.disconnect();
@@ -383,8 +381,7 @@ void goToSleep(int sleepType) {
             dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
             // Disable the charger before night sleep
             configCharger(false);
-            Log.info("(goToSleep) Go to sleep at : " + Time.timeStr());
-            Log.info("(goToSleep) dt = %d", dt);
+            Log.info("(goToSleep) 'SLEEP_All_NIGHT' - Go to sleep at : %s for %d seconds", Time.timeStr(), dt);
             if (dt > NIGHT_SLEEP_LENGTH_HR * 60 * 60 ){
                 dt = NIGHT_SLEEP_LENGTH_HR * 60 * 60;
             }
@@ -473,9 +470,9 @@ float readThermistor(int NSamples, int interval, String SelectThermistor) {
     }
     temp = (sum / NSamples) + THERMISTOROFFSET;     // Average the readings and correct the offset
     if (SelectThermistor == "Ext") {
-        Log.info("(readThermistor) Temperature Ext. = %.1f°C", temp); // Log final value at info level
+        Log.trace("(readThermistor) Temperature Ext. = %.1f°C", temp); // Log final value at info level
     } else {
-        Log.info("(readThermistor) Temperature Bat. = %.1f°C", temp); // Log final value at info level
+        Log.trace("(readThermistor) Temperature Bat. = %.1f°C", temp); // Log final value at info level
     }
     digitalWrite(thermistorPowerPin, false); // Turn OFF thermistor
     return temp;
@@ -497,7 +494,7 @@ float readSI7051(){
     byte lsb = Wire1.read();
     uint16_t val = msb << 8 | lsb;
     float temperature = (175.72*val) / 65536 - 46.85;
-    Log.info("(readSI7051) Si7051 Temperature: %.2f°C", temperature);
+    Log.trace("(readSI7051) Si7051 Temperature: %.2f°C", temperature);
     return temperature;
 }
 
@@ -561,7 +558,7 @@ float readLightIntensitySensor() {
     lightRawValue = AverageReadings(lightSensorInputPin, NUMSAMPLES, 10); // Average multiple raw readings to reduce noise
     Log.trace("(readLightIntensitySensor) lightRawValue = %.0f", lightRawValue);                   // Log raw data at trace level for debugging
     lightIntensity = LightRaw2Lux(lightRawValue);                       // Convert to Lux
-    Log.info("(readLightIntensitySensor) Light int. = %.0f Lux", lightIntensity);                  // Log final value at info level
+    Log.trace("(readLightIntensitySensor) Light int. = %.0f Lux", lightIntensity);                  // Log final value at info level
     return lightIntensity;
 }
 
