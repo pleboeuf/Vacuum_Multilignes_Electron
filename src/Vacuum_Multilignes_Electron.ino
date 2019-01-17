@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.9.03";             // Version of this firmware.
+String FirmwareVersion = "0.9.04";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -83,14 +83,14 @@ String myNameIs = "";
 // wakeupPin definition
 #define wakeupPin  D2
 
-// Thermistor parameters and variable definitions
+// Temperature and thermistor parameters and variables definitions
 #define TEMPERATURENOMINAL 25                 // Ref temperature for thermistor
 #define BCOEFFICIENT 3470                     // The beta coefficient at 0 degrees of the thermistor (nominal is 3435 (25/85))
 #define SERIESRESISTOR 10000UL                // the value of the resistor in serie with the thermistor
 #define THERMISTORNOMINAL 10000UL             // thermistor resistance at 25 degrees C
 #define THERMISTOROFFSET 2.5                  // Offset observed when reading the thermistor
 
-float minBatteryLevel = 30.0;                    // Sleep unless battery is above this level
+float minBatteryLevel = 30.0;                 // Sleep unless battery is above this level
 
 Thermistor *ext_thermistor;
 Thermistor *battery_thermistor;
@@ -99,14 +99,15 @@ int Ext_thermistorInputPin = A4;
 int Bat_thermistorInputPin = B5;
 int VinPin = A6;
 
-enum sleepTypeDef {SLEEP_NORMAL, SLEEP_LOW_BATTERY, SLEEP_TWO_MINUTES, SLEEP_TOO_COLD, SLEEP_All_NIGHT};
-enum chState {off, lowCurrent, highCurrent, unknown};
-chState chargerStatus = unknown;
-
 float ExtTemp = 0;
 float BatteryTemp = 0;
-float minPublishTemp = 0;                     // Do not publish below 5 (pour tes. normalement -3)
-String myID;                                  // Device Id
+float minPublishTemp = -1;                     // Do not publish below 5 (pour tes. normalement -3)
+float lowTempLimit = -15;
+
+// Sleep and charger variables definitions
+enum sleepTypeDef {SLEEP_NORMAL, SLEEP_TOO_COLD, SLEEP_LOW_BATTERY, SLEEP_VERY_COLD, SLEEP_All_NIGHT, SLEEP_TWO_MINUTES};
+enum chState {off, lowCurrent, highCurrent, unknown};
+chState chargerStatus = unknown;
 
 // Light sensor parameters and variable definitions
 #define LOADRESISTOR 51000UL                  // Resistor used to convert current to voltage on the light sensor
@@ -139,14 +140,13 @@ int deltaTx  = 0;                             // Difference tx data count
 int deltaRx  = 0;                             // Difference rx data count
 int startTime = 0;
 int start    = 0;
-int wakeup_time   = 0;                             // Wakeup time in ms
+int wakeup_time   = 0;                        // Wakeup time in ms
 retained int lastDay = 0;
 // int lastDay = 0;
 
-unsigned long lastSync = millis();
-char publishStr[120];
-retained int noSerie;                             // Le numéro de série est généré automatiquement
-// int noSerie;                             // Le numéro de série est généré automatiquement
+// Various variable and definitions
+retained int noSerie;                         // Le numéro de série est généré automatiquement
+// int noSerie;                               // Le numéro de série est généré automatiquement
 retained time_t newGenTimestamp = 0;
 // time_t newGenTimestamp = 0;
 retained int restartCount = 0;
@@ -155,11 +155,16 @@ int wakeCount = 0;
 retained int FailCount = 0;
 // int FailCount = 0;
 retained int SigSystemResetCount = 0;
+
 FuelGauge fuel;
 float soc = 0;
 float Vbat = 0;
-bool updateDisponible = false;
-int updateCounter = 10;
+
+String myID = "";                              // Device Id
+bool SoftUpdateDisponible = false;
+int updateCounter = 4;
+unsigned long lastSync = millis();
+char publishStr[120];
 
 /* Define a log handler on Serial1 for log messages */
 Serial1LogHandler log1Handler(115200, LOG_LEVEL_TRACE, {   // Logging level for non-application messages
@@ -263,6 +268,10 @@ void loop() {
         goToSleep(SLEEP_NORMAL);
 
     // Stop Publish when external temperature is below the minPublishTemp - 0.5°C and enter low power sleep mode
+    } else if (ExtTemp <= lowTempLimit){
+        Log.info("(loop) Extreme cold. Long sleep");
+        goToSleep(SLEEP_VERY_COLD);
+
     } else if (ExtTemp <= minPublishTemp - 0.5){
         Log.info("(loop) Too cold to publish");
         goToSleep(SLEEP_TOO_COLD);
@@ -291,7 +300,7 @@ void loop() {
 }
 
 void my_Handler(const char *event, const char *data){
-    updateDisponible = true;
+    SoftUpdateDisponible = true;
     updateCounter = 12;
     Log.info("(my_Handler) Software update available. updateCounter = %d", updateCounter);
 }
@@ -308,6 +317,9 @@ void initSI7051(){
 // Determine sleep time and mode
 // ***************************************************************
 void goToSleep(int sleepType) {
+    unsigned long  dt = 0;
+    unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_LENGTH_HR * 60;
+
     // Log info for debugging before going to sleep
     lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
     String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
@@ -315,10 +327,10 @@ void goToSleep(int sleepType) {
              "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
 
     // Disable light intensity sensor and RGB LED mirroring
-    unsigned long  dt = 0;
     digitalWrite(lightSensorEnablePin, true);
     RGB.mirrorDisable();
     Particle.process();
+
     switch (sleepType)
     {
         case SLEEP_NORMAL:
@@ -328,10 +340,10 @@ void goToSleep(int sleepType) {
             if (dt > 360UL){
                 dt = 300UL;
             }
-            if (updateDisponible) {
+            if (SoftUpdateDisponible) {
                 dt = dt - 60;
                 if (updateCounter-- <= 0){
-                    updateDisponible = false;
+                    SoftUpdateDisponible = false;
                 }
                 Log.info("(goToSleep) OTA available. updateCounter = %d", updateCounter);
                 delay (60000UL); //Stay awake for a minute to gives time for the update
@@ -339,22 +351,6 @@ void goToSleep(int sleepType) {
             Log.info("(goToSleep) 'SLEEP_NORMAL' for %lu seconds", dt);
             delay(2000UL);
             System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
-            break;
-
-        case SLEEP_LOW_BATTERY:
-            // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-            Log.info("(goToSleep) 'SLEEP_LOW_BATTERY' - Battery below %0.1f percent. Sleep for one hour.", minBatteryLevel);
-            // Particle.disconnect();
-            delay(2000UL);
-            System.sleep(wakeupPin, FALLING, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
-            break;
-
-        case SLEEP_TWO_MINUTES:
-            // Two minutes retry sleep
-            Log.info("(goToSleep) 'SLEEP_TWO_MINUTES' - Difficulty connecting to the cloud. Resetting in 2 minutes.");
-            Particle.disconnect();
-            delay(2000UL);
-            System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
             break;
 
         case SLEEP_TOO_COLD:
@@ -373,11 +369,26 @@ void goToSleep(int sleepType) {
             System.sleep(wakeupPin, FALLING, dt); // Low power mode
             break;
 
+        case SLEEP_LOW_BATTERY:
+            // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
+            Log.info("(goToSleep) 'SLEEP_LOW_BATTERY' - Battery below %0.1f percent. Sleep for one hour.", minBatteryLevel);
+            // Particle.disconnect();
+            delay(2000UL);
+            System.sleep(wakeupPin, FALLING, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+            break;
+
+        case SLEEP_VERY_COLD:
+            // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
+            Log.info("(goToSleep) 'Much too cold! Sleep for one hour to protect battery.");
+            // Particle.disconnect();
+            delay(2000UL);
+            System.sleep(wakeupPin, FALLING, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+            break;
+
         case SLEEP_All_NIGHT:
             // Night sleep
             Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes and %d seconds.", Time.hour(), dt / 60, (dt /60)%60);
             delay(2000UL);
-            unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_LENGTH_HR * 60;
             dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
             // Disable the charger before night sleep
             configCharger(false);
@@ -393,6 +404,14 @@ void goToSleep(int sleepType) {
             }
             delay(2000UL);
             System.sleep(wakeupPin, FALLING, dt); // Low power mode
+            break;
+
+        case SLEEP_TWO_MINUTES:
+            // Two minutes retry sleep
+            Log.info("(goToSleep) 'SLEEP_TWO_MINUTES' - Difficulty connecting to the cloud. Resetting in 2 minutes.");
+            Particle.disconnect();
+            delay(2000UL);
+            System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
             break;
     }
 
