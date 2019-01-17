@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.9.04";             // Version of this firmware.
+String FirmwareVersion = "0.9.05";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -247,35 +247,27 @@ void loop() {
     ExtTemp = readThermistor(1, 1, "Ext");
     configCharger(true);
 
-    // Do not publish if charge is lower than 20%
+    // Do not publish if charge is lower than 30%
     if (soc < minBatteryLevel) {
         // SLEEP the Electron for an hour to recharge the battery
-        restartCount++;
-        Log.warn("\n(loop) LOOP Restart. Count: %d, battery: %.1f", restartCount, soc);
+        Log.warn("\n(loop) Low battery: %.1f", soc);
         goToSleep(SLEEP_LOW_BATTERY);
-    }
-    // Check if its time for night sleep
-    if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
-        goToSleep(SLEEP_All_NIGHT);
-    }
 
-    // Start Publish when external temperature is above the minPublishTemp + 0.5°C and enter low power sleep mode
-    if (ExtTemp >= minPublishTemp + 0.5) {
+    } else if (ExtTemp < lowTempLimit){
+        goToSleep(SLEEP_VERY_COLD);
+
+    // Stop Publish when external temperature is below the minPublishTemp - 0.5°C then enter low power sleep mode
+    } else if (ExtTemp <= minPublishTemp - 0.5){
+        goToSleep(SLEEP_TOO_COLD);
+
+    // Start Publish when external temperature is above the minPublishTemp + 0.5°C then enter low power sleep mode
+    } else if (ExtTemp >= minPublishTemp + 0.5) {
         vacChanged = readVacuums();
         if (wakeCount == WakeCountToPublish || vacChanged) {
             publishData();
         }
         goToSleep(SLEEP_NORMAL);
-
-    // Stop Publish when external temperature is below the minPublishTemp - 0.5°C and enter low power sleep mode
-    } else if (ExtTemp <= lowTempLimit){
-        Log.info("(loop) Extreme cold. Long sleep");
-        goToSleep(SLEEP_VERY_COLD);
-
-    } else if (ExtTemp <= minPublishTemp - 0.5){
-        Log.info("(loop) Too cold to publish");
-        goToSleep(SLEEP_TOO_COLD);
-
+    // When temperature is close to minPublishTemp
     } else {
         if (Particle.connected()) {
             // Keep Publishing when close to minPublishTemp if the connection was already established
@@ -286,7 +278,6 @@ void loop() {
             goToSleep(SLEEP_NORMAL);
         } else {
         // Keep the low power mode when close to minPublishTemp if the connection was already disconnected
-        Log.info("(loop) Too cold to publish");
         goToSleep(SLEEP_TOO_COLD);
         }
     }
@@ -330,6 +321,11 @@ void goToSleep(int sleepType) {
     digitalWrite(lightSensorEnablePin, true);
     RGB.mirrorDisable();
     Particle.process();
+
+    // Check if its time for night sleep
+    if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
+        sleepType = SLEEP_All_NIGHT;
+    }
 
     switch (sleepType)
     {
