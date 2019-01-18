@@ -52,15 +52,17 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.9.05";             // Version of this firmware.
+String FirmwareVersion = "0.9.07";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
 String FirmwareDate = F_Date + " " + F_Time;  //compilation date and time (UTC)
 String myEventName = "test1_Vacuum/Lignes";   // Name of the event to be sent to the cloud
 String myNameIs = "";
+String myID = "";                             // Device Id
 
 #define SLEEPTIMEinMINUTES 5                  // wake-up every SLEEPTIMEinMINUTES and check if there a reason to publish
+#define ONEHOURSLEEPTIMEinMIN 60              // 60 MINUTES
 #define ONEHOURinSECONDS 3600UL
 #define MINUTES 60UL                          //
 #define WakeCountToPublish 3                  // Number of wake-up before publishing
@@ -69,7 +71,7 @@ String myNameIs = "";
 #define NIGHT_SLEEP_START_MIN 00              // Sleep for the night beginning at 19h00
 #define NIGHT_SLEEP_LENGTH_HR 10              // Night sleep duration in hours
 #define TOO_COLD_SLEEP_IN_SECONDs 10 * 60     //
-#define TimeBoundaryOffset - 0                // wake-up at time boundary plus some seconds
+#define TimeBoundaryOffset 0                  // wake-up at time boundary plus some seconds
 #define WatchDogTimeout 480000UL              // Watch Dog Timeaout delay
 
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
@@ -101,8 +103,8 @@ int VinPin = A6;
 
 float ExtTemp = 0;
 float BatteryTemp = 0;
-float minPublishTemp = -1;                     // Do not publish below 5 (pour tes. normalement -3)
-float lowTempLimit = -15;
+float minPublishTemp = -1;                     // Do not publish below -1
+float lowTempLimit = -15;                      // Reduce the wakup period from 5 min to 1 hour below this temperature
 
 // Sleep and charger variables definitions
 enum sleepTypeDef {SLEEP_NORMAL, SLEEP_TOO_COLD, SLEEP_LOW_BATTERY, SLEEP_VERY_COLD, SLEEP_All_NIGHT, SLEEP_TWO_MINUTES};
@@ -160,7 +162,6 @@ FuelGauge fuel;
 float soc = 0;
 float Vbat = 0;
 
-String myID = "";                              // Device Id
 bool SoftUpdateDisponible = false;
 int updateCounter = 4;
 unsigned long lastSync = millis();
@@ -355,7 +356,7 @@ void goToSleep(int sleepType) {
             if (dt > 360UL){
                 dt = 300UL;
             }
-            Log.info("(goToSleep) 'SLEEP_TOO_COLD' - Too cold to publish. Try again in %d seconds.", dt);
+            Log.info("(goToSleep) Too cold to publish. - 'SLEEP_TOO_COLD' for %d seconds.", dt);
             if (Particle.connected()){
                 Particle.disconnect();
                 Cellular.disconnect();
@@ -367,28 +368,30 @@ void goToSleep(int sleepType) {
 
         case SLEEP_LOW_BATTERY:
             // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-            Log.info("(goToSleep) 'SLEEP_LOW_BATTERY' - Battery below %0.1f percent. Sleep for one hour.", minBatteryLevel);
+            dt = (ONEHOURSLEEPTIMEinMIN - Time.minute() % ONEHOURSLEEPTIMEinMIN) * 60 - Time.second() + TimeBoundaryOffset;
+            Log.info("(goToSleep) Battery below %0.1f percent. 'SLEEP_LOW_BATTERY' for %d seconds.", minBatteryLevel, dt);
             // Particle.disconnect();
             delay(2000UL);
-            System.sleep(wakeupPin, FALLING, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+            System.sleep(wakeupPin, FALLING, dt); // Check again in 1 hour if publish conditions are OK
             break;
 
         case SLEEP_VERY_COLD:
             // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
-            Log.info("(goToSleep) 'Much too cold! Sleep for one hour to protect battery.");
+            dt = (ONEHOURSLEEPTIMEinMIN - Time.minute() % ONEHOURSLEEPTIMEinMIN) * 60 - Time.second() + TimeBoundaryOffset;
+            Log.info("(goToSleep) Much too cold! - 'SLEEP_VERY_COLD' for %d seconds to protect battery.", dt);
             // Particle.disconnect();
             delay(2000UL);
-            System.sleep(wakeupPin, FALLING, ONEHOURinSECONDS); // Check again in 1 hour if publish conditions are OK
+            System.sleep(wakeupPin, FALLING, dt); // Check again in 1 hour if publish conditions are OK
             break;
 
         case SLEEP_All_NIGHT:
             // Night sleep
-            Log.info("(goToSleep) Night time! It's %d O'clock. Going to sleep for %d minutes and %d seconds.", Time.hour(), dt / 60, (dt /60)%60);
             delay(2000UL);
             dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
+            Log.info("(goToSleep) It's %d O'clock. Going to 'SLEEP_All_NIGHT' for %d minutes and %d seconds.", Time.hour(), dt / 60, (dt /60)%60);
             // Disable the charger before night sleep
             configCharger(false);
-            Log.info("(goToSleep) 'SLEEP_All_NIGHT' - Go to sleep at : %s for %d seconds", Time.timeStr(), dt);
+            Log.info("(goToSleep) 'SLEEP_All_NIGHT' - Go to sleep at : %s for %d seconds", timeNow, dt);
             if (dt > NIGHT_SLEEP_LENGTH_HR * 60 * 60 ){
                 dt = NIGHT_SLEEP_LENGTH_HR * 60 * 60;
             }
