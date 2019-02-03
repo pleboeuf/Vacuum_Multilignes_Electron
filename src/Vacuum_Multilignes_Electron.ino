@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.9.07";             // Version of this firmware.
+String FirmwareVersion = "0.9.08";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -293,7 +293,7 @@ void loop() {
 
 void my_Handler(const char *event, const char *data){
     SoftUpdateDisponible = true;
-    updateCounter = 12;
+    updateCounter = 12; // Stay aware of software update available for 1 hour 
     Log.info("(my_Handler) Software update available. updateCounter = %d", updateCounter);
 }
 
@@ -324,9 +324,9 @@ void goToSleep(int sleepType) {
     Particle.process();
 
     // Check if its time for night sleep
-    if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
-        sleepType = SLEEP_All_NIGHT;
-    }
+        // if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
+        //     sleepType = SLEEP_All_NIGHT;
+        // }
 
     switch (sleepType)
     {
