@@ -52,12 +52,12 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.9.08";             // Version of this firmware.
+String FirmwareVersion = "0.9.09";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
 String FirmwareDate = F_Date + " " + F_Time;  //compilation date and time (UTC)
-String myEventName = "test1_Vacuum/Lignes";   // Name of the event to be sent to the cloud
+String myEventName = "Vacuum/Lignes";   // Name of the event to be sent to the cloud
 String myNameIs = "";
 String myID = "";                             // Device Id
 
@@ -90,7 +90,7 @@ String myID = "";                             // Device Id
 #define BCOEFFICIENT 3470                     // The beta coefficient at 0 degrees of the thermistor (nominal is 3435 (25/85))
 #define SERIESRESISTOR 10000UL                // the value of the resistor in serie with the thermistor
 #define THERMISTORNOMINAL 10000UL             // thermistor resistance at 25 degrees C
-#define THERMISTOROFFSET 2.5                  // Offset observed when reading the thermistor
+#define THERMISTOROFFSET 1.8                  // Offset observed when reading the thermistor
 
 float minBatteryLevel = 30.0;                 // Sleep unless battery is above this level
 
@@ -293,7 +293,7 @@ void loop() {
 
 void my_Handler(const char *event, const char *data){
     SoftUpdateDisponible = true;
-    updateCounter = 12; // Stay aware of software update available for 1 hour 
+    updateCounter = 12; // Stay aware of software update available for 1 hour
     Log.info("(my_Handler) Software update available. updateCounter = %d", updateCounter);
 }
 
