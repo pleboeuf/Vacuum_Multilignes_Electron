@@ -52,7 +52,7 @@ SYSTEM_MODE(MANUAL);
 STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.9.09";             // Version of this firmware.
+String FirmwareVersion = "0.9.11";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -76,7 +76,7 @@ String myID = "";                             // Device Id
 
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
 #define SAMPLEsINTERVAL 10UL                  // Interval of time between samples in ms
-#define VacuumPublishLimits 1                 // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
+#define VacuumPublishLimits -1                 // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
 #define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
 
 #define BLUE_LED  D7                          // Blue led awake activity indicator
@@ -702,8 +702,8 @@ void syncCloudTime() {
 
 void configCharger(bool mode) {
     PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
-    BatteryTemp = readThermistor(1, 1, "Bat");
-    readSI7051();
+    readThermistor(1, 1, "Bat");
+    BatteryTemp = readSI7051();
     // Mode true: normal operation
     if (mode == true) {
         if (BatteryTemp <= 1.0 or BatteryTemp >= 40.0) {
@@ -781,7 +781,7 @@ String getDeviceEventName(String devId){
         myNameIs = "EB-Elec-Dev1";
         myEventName = "test1_Vacuum/Lignes";
     } else if (devId == "240051000c51343334363138"){
-        myNameIs = "EB-VF7-9";
+        myNameIs = "VF7-9";
         myEventName = "test2_Vacuum/Lignes";
     } else {
         myEventName = "Vacuum/Lignes";
