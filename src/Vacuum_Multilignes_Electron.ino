@@ -49,10 +49,9 @@ Sleep duration: See #define SLEEPTIMEinMINUTES
 
 SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
-STARTUP(System.enableFeature(FEATURE_RETAINED_MEMORY));
 
 // General definitions
-String FirmwareVersion = "0.9.11";             // Version of this firmware.
+String FirmwareVersion = "1.0.0";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -65,10 +64,13 @@ String myID = "";                             // Device Id
 #define ONEHOURSLEEPTIMEinMIN 60              // 60 MINUTES
 #define ONEHOURinSECONDS 3600UL
 #define MINUTES 60UL                          //
+
 #define WakeCountToPublish 3                  // Number of wake-up before publishing
-#define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
+#define unJourEnMillis (24 * 60 * 60 * 1000)
 #define NIGHT_SLEEP_START_HR 21               // Sleep for the night beginning at 19h00
 #define NIGHT_SLEEP_START_MIN 00              // Sleep for the night beginning at 19h00
+#define AUTO_CALIB_START_HR 02                // Hours at which time to start the auto calibration of external temperature
+#define AUTO_CALIB_START_MIN 00               // minute at which time to start the auto calibration of external temperature
 #define NIGHT_SLEEP_LENGTH_HR 10              // Night sleep duration in hours
 #define TOO_COLD_SLEEP_IN_SECONDs 10 * 60     //
 #define TimeBoundaryOffset 0                  // wake-up at time boundary plus some seconds
@@ -76,8 +78,10 @@ String myID = "";                             // Device Id
 
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
 #define SAMPLEsINTERVAL 10UL                  // Interval of time between samples in ms
-#define VacuumPublishLimits -1                 // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
+#define VacuumPublishLimits -1.5              // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
 #define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
+#define StartDSTtime 1552197600   //dim 10 mar 2019, 02 h 00 = 1552197600 local time
+#define EndDSTtime 1572850800     //dim 4 nov 2019, 02 h 00 = 1572850800 local time
 
 #define BLUE_LED  D7                          // Blue led awake activity indicator
 #define maxConnectTime 900                    // Maximum allowable time for connection to the Cloud
@@ -90,7 +94,9 @@ String myID = "";                             // Device Id
 #define BCOEFFICIENT 3470                     // The beta coefficient at 0 degrees of the thermistor (nominal is 3435 (25/85))
 #define SERIESRESISTOR 10000UL                // the value of the resistor in serie with the thermistor
 #define THERMISTORNOMINAL 10000UL             // thermistor resistance at 25 degrees C
-#define THERMISTOROFFSET 1.8                  // Offset observed when reading the thermistor
+#define validCalibAddress        0            // Adresse of flag indicating that thermistor offset is calibrated
+#define ThermistorOffsetAddress 10            // Adresse of thermistor offset value in EEPROM
+#define ThermistorSlopeAddress  20            // Adresse of thermistor slope value in EEPROM
 
 float minBatteryLevel = 30.0;                 // Sleep unless battery is above this level
 
@@ -101,15 +107,20 @@ int Ext_thermistorInputPin = A4;
 int Bat_thermistorInputPin = B5;
 int VinPin = A6;
 
-float ExtTemp = 0;
-float BatteryTemp = 0;
-float minPublishTemp = -1;                     // Do not publish below -1
-float lowTempLimit = -15;                      // Reduce the wakup period from 5 min to 1 hour below this temperature
+float ExtTemp = 0.0;
+float BatteryTemp = 0.0;
+float minPublishTemp = -1.0;                     // Do not publish below -1
+float lowTempLimit = -15.0;                      // Reduce the wakup period from 5 min to 1 hour below this temperature
+double thermistorOffset = 0.0;
+double thermistorSlope = 0.0;
+uint16_t isCalibrated = 0;
+bool enableAutoCalib = true;
 
 // Sleep and charger variables definitions
 enum sleepTypeDef {SLEEP_NORMAL, SLEEP_TOO_COLD, SLEEP_LOW_BATTERY, SLEEP_VERY_COLD, SLEEP_All_NIGHT, SLEEP_TWO_MINUTES};
 enum chState {off, lowCurrent, highCurrent, unknown};
 chState chargerStatus = unknown;
+bool NightSleepFlag = false;
 
 // Light sensor parameters and variable definitions
 #define LOADRESISTOR 51000UL                  // Resistor used to convert current to voltage on the light sensor
@@ -162,6 +173,7 @@ FuelGauge fuel;
 float soc = 0;
 float Vbat = 0;
 
+unsigned long lastRTCSync = millis();
 bool SoftUpdateDisponible = false;
 int updateCounter = 4;
 unsigned long lastSync = millis();
@@ -181,7 +193,7 @@ void setup() {
     Log.info("(setup) System version: " + System.version());
     Log.info("(setup) Firmware: " + FirmwareVersion);
     Log.info("(setup) Firmware date: " + FirmwareDate);
-    Time.zone(-5);
+    Time.zone(-4);
     pinMode(vacuum5VoltsEnablePin, OUTPUT);        // Put all control pins in output mode
     pinMode(lightSensorEnablePin, OUTPUT);
     pinMode(thermistorPowerPin, OUTPUT);
@@ -204,6 +216,20 @@ void setup() {
     Log.info("(setup) Battery boot voltage: %0.3f ,charge level: %0.2f, and temperature: %0.1f", Vbat, soc, BatteryTemp);
     configCharger(true);
     Particle.subscribe("UpdateAvailable", my_Handler, MY_DEVICES);
+    Particle.variable("Version", FirmwareVersion);
+    Particle.variable("ThermistorIsCalib", isCalibrated);
+    Particle.variable("ThermistorOffset", thermistorOffset);
+    Particle.function("setThermOffset", setThermistorOffset);
+    Particle.function("setThermSlope", setThermistorSlope);
+    Particle.function("setAutoCalib", setAutoCalibFlag);
+    Particle.function("enableNightSleep", enableNightSleep);
+
+    EEPROM.get(validCalibAddress, isCalibrated);
+    if (isCalibrated != 0xFFFF) {
+        EEPROM.get(ThermistorOffsetAddress ,thermistorOffset);
+        Log.info("(setup) Thermistor is calibrated: %d", thermistorOffset);
+    }
+
     if (soc > minBatteryLevel) {
         Log.info("(setup) Connecting to tower and cloud.");
         Particle.connect();
@@ -312,6 +338,20 @@ void goToSleep(int sleepType) {
     unsigned long  dt = 0;
     unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_LENGTH_HR * 60;
 
+    // Synchronisation du temps avec Particle Cloud une fois par jour
+    if (millis() - lastRTCSync > unJourEnMillis) {
+      Particle.syncTime();
+      Log.info("(goToSleep) Synchronisation du temps avec le nuage de Particle");
+      lastRTCSync = millis();
+      if (!Time.isDST() && Time.now() >= StartDSTtime){
+        Time.beginDST();
+        Log.info("(goToSleep) Début de l'heure avancé");
+      } else if (Time.isDST() && Time.now() >= EndDSTtime){
+        Time.endDST();
+        Log.info("(goToSleep) Fin de l'heure avancé");
+      }
+    }
+
     // Log info for debugging before going to sleep
     lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
     String timeNow = Time.format(Time.now(), TIME_FORMAT_ISO8601_FULL);
@@ -327,6 +367,16 @@ void goToSleep(int sleepType) {
         // if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
         //     sleepType = SLEEP_All_NIGHT;
         // }
+
+    if (enableAutoCalib == true && Time.hour() == AUTO_CALIB_START_HR && Time.minute() == AUTO_CALIB_START_MIN){
+        double deltaTemp = ExtTemp - readSI7051();
+        thermistorOffset = thermistorOffset - deltaTemp;
+        char newThermOffset[10] = "";
+        sprintf(newThermOffset, "%.2f", thermistorOffset);
+        Log.info("(goToSleep) New thermistor offset is: %.2f", newThermOffset);
+        setThermistorOffset(newThermOffset);
+        enableAutoCalib = false;
+    }
 
     switch (sleepType)
     {
@@ -445,7 +495,7 @@ bool publishData() {
             newGenTimestamp = Time.now();
         }
         String msg = makeJSON(noSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3],
-            ExtTemp, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality);
+            ExtTemp, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality, BatteryTemp);
         Log.info("(publishData) Publishing now...");
         pubSuccess = Particle.publish(myEventName, msg, PRIVATE, NO_ACK);
         for (int i=0; i<100; i++) { // Gives 10 seconds to send the data
@@ -477,7 +527,7 @@ float readThermistor(int NSamples, int interval, String SelectThermistor) {
     digitalWrite(thermistorPowerPin, true); // Turn ON thermistor Power
     delay(5UL);                           // Wait for voltage to stabilize
     float sum = 0;
-    float temp = 0;
+    double temp = 0;
     for (int i=0; i< NSamples; i++) {
         delay(interval);              // Delay between successives readings
         if (SelectThermistor == "Ext") {
@@ -486,14 +536,14 @@ float readThermistor(int NSamples, int interval, String SelectThermistor) {
             sum += battery_thermistor->readTempC(); // Read temperature and accumulate the readings
         }
     }
-    temp = (sum / NSamples) + THERMISTOROFFSET;     // Average the readings and correct the offset
+    temp = (sum / NSamples) + thermistorOffset;     // Average the readings and correct the offset
     if (SelectThermistor == "Ext") {
         Log.trace("(readThermistor) Temperature Ext. = %.1f°C", temp); // Log final value at info level
     } else {
         Log.trace("(readThermistor) Temperature Bat. = %.1f°C", temp); // Log final value at info level
     }
     digitalWrite(thermistorPowerPin, false); // Turn OFF thermistor
-    return temp;
+    return (float)temp;
 }
 
 // ***************************************************************
@@ -619,10 +669,10 @@ float AverageReadings (int anInputPinNo, int NSamples, int interval) {
 // ***************************************************************
 // Formattage standard pour les données sous forme JSON
 // ***************************************************************
-String makeJSON(int numSerie, int timeStamp, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, int RSSI, int signalQual) {
-    char publishString[200];
-    sprintf(publishString,"{\"noSerie\": %d,\"generation\": %lu,\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.3f,\"soc\":%.2f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d}",
-    numSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], ExtTemp, lightIntensityLux, Vin, soc, volt, RSSI, signalQual);
+String makeJSON(int numSerie, int timeStamp, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, int RSSI, int signalQual, float BatTemp) {
+    char publishString[255];
+    sprintf(publishString,"{\"noSerie\": %d,\"generation\": %lu,\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.3f,\"soc\":%.2f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d,\"batTemp\":%.1f}",
+    numSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], ExtTemp, lightIntensityLux, Vin, soc, volt, RSSI, signalQual, BatTemp);
     Log.info("(makeJSON) %s", publishString);
     return publishString;
 }
@@ -747,6 +797,51 @@ void configCharger(bool mode) {
     }
 }
 
+int setThermistorOffset(String offsetValue){
+    thermistorOffset = offsetValue.toFloat();
+    EEPROM.put(ThermistorOffsetAddress, thermistorOffset);
+    uint16_t validThermCalib = 0x0001;
+    EEPROM.put(validCalibAddress, validThermCalib);
+    Log.info("(setThermistorOffset) Set thermistor offset to: %s, %0.3f", offsetValue, thermistorOffset);
+    return 0;
+}
+
+int setThermistorSlope(String slopeValue){
+    thermistorSlope = slopeValue.toFloat();
+    EEPROM.put(ThermistorSlopeAddress, thermistorSlope);
+    uint16_t validThermCalib = 0x0001;
+    EEPROM.put(validCalibAddress, validThermCalib);
+    Log.info("(setThermistorSlope) Set thermistor slope to: %s, %0.3f", slopeValue, thermistorSlope);
+    return 0;
+}
+
+int setAutoCalibFlag(String state){
+    if (state == "true"){
+        enableAutoCalib = true;
+        Log.info("enableAutoCalib is set to: %s", state);
+        return 1;
+    } else if (state == "false"){
+        enableAutoCalib = false;
+        Log.info("enableAutoCalib is set to: %s", state);
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
+int enableNightSleep(String state) {
+    if (state == "true"){
+        NightSleepFlag = true;
+        Log.info("NightSleepFlag is set to: %s", state);
+        return 1;
+    } else if (state == "false"){
+        NightSleepFlag = false;
+        Log.info("NightSleepFlag is set to: %s", state);
+        return 0;
+    } else {
+        return -1;
+    }
+}
 //Dev name      No de lignes
 // VA1-4     4  Lignes A1 à A4 RSSI = -77, qual 37
 // VA5B1-2   3  Lignes A5, B1 et B2
@@ -780,9 +875,6 @@ String getDeviceEventName(String devId){
     if (devId == "36004f000251353337353037"){
         myNameIs = "EB-Elec-Dev1";
         myEventName = "test1_Vacuum/Lignes";
-    } else if (devId == "240051000c51343334363138"){
-        myNameIs = "VF7-9";
-        myEventName = "test2_Vacuum/Lignes";
     } else {
         myEventName = "Vacuum/Lignes";
     }
