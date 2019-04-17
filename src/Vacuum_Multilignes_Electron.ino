@@ -51,7 +51,7 @@ SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
 // General definitions
-String FirmwareVersion = "1.0.0";             // Version of this firmware.
+String FirmwareVersion = "1.0.4";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -78,10 +78,12 @@ String myID = "";                             // Device Id
 
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
 #define SAMPLEsINTERVAL 10UL                  // Interval of time between samples in ms
-#define VacuumPublishLimits -1.5              // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
+#define VacuumPublishLimits -1                // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
 #define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
-#define StartDSTtime 1552197600   //dim 10 mar 2019, 02 h 00 = 1552197600 local time
-#define EndDSTtime 1572850800     //dim 4 nov 2019, 02 h 00 = 1572850800 local time
+#define StartDSTtime 1552197600               //dim 10 mar 2019, 02 h 00 = 1552197600 local time
+#define EndDSTtime 1572850800                 //dim 4 nov 2019, 02 h 00 = 1572850800 local time
+#define ChargeVoltageMaxLevel_cold 4208            //Max voltage allow by charger for cold period
+#define ChargeVoltageMaxLevel_warm 4112            //Max voltage allow by charger for warm period to prevent overcharge
 
 #define BLUE_LED  D7                          // Blue led awake activity indicator
 #define maxConnectTime 900                    // Maximum allowable time for connection to the Cloud
@@ -109,12 +111,12 @@ int VinPin = A6;
 
 float ExtTemp = 0.0;
 float BatteryTemp = 0.0;
-float minPublishTemp = -1.0;                     // Do not publish below -1
+float minPublishTemp = -2.0;                     // Do not publish below -1
 float lowTempLimit = -15.0;                      // Reduce the wakup period from 5 min to 1 hour below this temperature
 double thermistorOffset = 0.0;
 double thermistorSlope = 0.0;
-uint16_t isCalibrated = 0;
-bool enableAutoCalib = true;
+uint32_t thermIsCalibrated = 0;
+bool enableAutoCalib = false;
 
 // Sleep and charger variables definitions
 enum sleepTypeDef {SLEEP_NORMAL, SLEEP_TOO_COLD, SLEEP_LOW_BATTERY, SLEEP_VERY_COLD, SLEEP_All_NIGHT, SLEEP_TWO_MINUTES};
@@ -215,17 +217,21 @@ void setup() {
     BatteryTemp = readThermistor(1, 1, "Bat");
     Log.info("(setup) Battery boot voltage: %0.3f ,charge level: %0.2f, and temperature: %0.1f", Vbat, soc, BatteryTemp);
     configCharger(true);
-    Particle.subscribe("UpdateAvailable", my_Handler, MY_DEVICES);
-    Particle.variable("Version", FirmwareVersion);
-    Particle.variable("ThermistorIsCalib", isCalibrated);
-    Particle.variable("ThermistorOffset", thermistorOffset);
+    lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
+    Particle.subscribe("UpdateAvailable", SoftUpdate_Handler, MY_DEVICES);
     Particle.function("setThermOffset", setThermistorOffset);
     Particle.function("setThermSlope", setThermistorSlope);
-    Particle.function("setAutoCalib", setAutoCalibFlag);
-    Particle.function("enableNightSleep", enableNightSleep);
+    Particle.function("setAutoCalib_Flag", setAutoCalibFlag);
+    Particle.function("setNightSleep_Flag", setNightSleepFlag);
+    Particle.function("setSoftUpdate_Flag", setSoftUpdateFlag);
 
-    EEPROM.get(validCalibAddress, isCalibrated);
-    if (isCalibrated != 0xFFFF) {
+    Particle.variable("Version", FirmwareVersion);
+    Particle.variable("Therm_Cal_Status", thermIsCalibrated);
+    Particle.variable("ThermistorOffset", thermistorOffset);
+    Particle.variable("SoftUpdate_status", SoftUpdateDisponible);
+
+    EEPROM.get(validCalibAddress, thermIsCalibrated);
+    if (thermIsCalibrated != 0xFFFFFFFF) {
         EEPROM.get(ThermistorOffsetAddress ,thermistorOffset);
         Log.info("(setup) Thermistor is calibrated: %d", thermistorOffset);
     }
@@ -317,10 +323,8 @@ void loop() {
     Log.info("(loop) Wake-up on: " + Time.timeStr() + ", WakeCount= %d", wakeCount);             // Log wakup time
 }
 
-void my_Handler(const char *event, const char *data){
-    SoftUpdateDisponible = true;
-    updateCounter = 12; // Stay aware of software update available for 1 hour
-    Log.info("(my_Handler) Software update available. updateCounter = %d", updateCounter);
+void SoftUpdate_Handler(const char *event, const char *data){
+    setSoftUpdateFlag("true");
 }
 
 void initSI7051(){
@@ -337,20 +341,6 @@ void initSI7051(){
 void goToSleep(int sleepType) {
     unsigned long  dt = 0;
     unsigned long  NightSleepTimeInMinutes = NIGHT_SLEEP_LENGTH_HR * 60;
-
-    // Synchronisation du temps avec Particle Cloud une fois par jour
-    if (millis() - lastRTCSync > unJourEnMillis) {
-      Particle.syncTime();
-      Log.info("(goToSleep) Synchronisation du temps avec le nuage de Particle");
-      lastRTCSync = millis();
-      if (!Time.isDST() && Time.now() >= StartDSTtime){
-        Time.beginDST();
-        Log.info("(goToSleep) Début de l'heure avancé");
-      } else if (Time.isDST() && Time.now() >= EndDSTtime){
-        Time.endDST();
-        Log.info("(goToSleep) Fin de l'heure avancé");
-      }
-    }
 
     // Log info for debugging before going to sleep
     lightIntensityLux = readLightIntensitySensor();               // Then read light intensity
@@ -370,12 +360,15 @@ void goToSleep(int sleepType) {
 
     if (enableAutoCalib == true && Time.hour() == AUTO_CALIB_START_HR && Time.minute() == AUTO_CALIB_START_MIN){
         double deltaTemp = ExtTemp - readSI7051();
-        thermistorOffset = thermistorOffset - deltaTemp;
-        char newThermOffset[10] = "";
-        sprintf(newThermOffset, "%.2f", thermistorOffset);
-        Log.info("(goToSleep) New thermistor offset is: %.2f", newThermOffset);
-        setThermistorOffset(newThermOffset);
-        enableAutoCalib = false;
+        // To prevent autocalib in case the SI7051 is bad.
+        if (abs(deltaTemp) < 7.0) {
+            thermistorOffset = thermistorOffset - deltaTemp;
+            char newThermOffset[10] = "";
+            sprintf(newThermOffset, "%.2f", thermistorOffset);
+            Log.info("(goToSleep) New thermistor offset is: %s", newThermOffset);
+            setThermistorOffset(newThermOffset);
+            enableAutoCalib = false;
+        }
     }
 
     switch (sleepType)
@@ -554,15 +547,19 @@ float readSI7051(){
     Wire1.write(0xF3); //calling for Si7051 to make a temperature measurement
     Wire1.endTransmission();
 
-    delay(15); //14 bit temperature conversion needs 10+ms time to complete.
+    delay(20); //14 bit temperature conversion needs 10+ms time to complete.
 
     Wire1.requestFrom(0x40, (uint8_t)2);
     delay(25);
     byte msb = Wire1.read();
     byte lsb = Wire1.read();
     uint16_t val = msb << 8 | lsb;
-    float temperature = (175.72*val) / 65536 - 46.85;
+    float temperature = ((175.72*val) / 65536) - 46.85;
+    if (temperature > 70.0){
+        temperature = 7.7777;
+    }
     Log.trace("(readSI7051) Si7051 Temperature: %.2f°C", temperature);
+
     return temperature;
 }
 
@@ -752,14 +749,18 @@ void syncCloudTime() {
 
 void configCharger(bool mode) {
     PMIC pmic; //Initalize the PMIC class so you can call the Power Management functions below.
-    readThermistor(1, 1, "Bat");
     BatteryTemp = readSI7051();
+    // In case of malfunction of SI7051 BatteryTemp = 7.7777°C
+    if (BatteryTemp >= 7.76 && BatteryTemp <= 7.78){
+        BatteryTemp = readThermistor(1, 1, "Bat");
+    }
     // Mode true: normal operation
+    pmic.setInputVoltageLimit(4840);                       // Set the lowest input voltage to 4.84 volts best setting for 6V solar panels
     if (mode == true) {
         if (BatteryTemp <= 1.0 or BatteryTemp >= 40.0) {
             if (chargerStatus != off) {
                 // Disable charger to protect the battery
-                pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
+                pmic.setChargeVoltage(ChargeVoltageMaxLevel_cold);                   // Set charge voltage to 100%
                 pmic.setChargeCurrent(0,0,0,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
                 pmic.disableCharging();
                 chargerStatus = off;
@@ -768,27 +769,34 @@ void configCharger(bool mode) {
         } else if (BatteryTemp <= 5.0) {
             if (chargerStatus != lowCurrent) {
                 // Reduce the charge current
-                pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
+                pmic.setChargeVoltage(ChargeVoltageMaxLevel_cold);                   // Set charge voltage to 100%
                 pmic.setChargeCurrent(0,0,0,0,0,1); //Set charging current to 1024mA (512 + 512 offset)
                 pmic.enableCharging();
                 chargerStatus = lowCurrent;
-                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to low current", BatteryTemp);
+                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to low current. ChargeVoltage: %d", BatteryTemp, ChargeVoltageMaxLevel_warm);
             }
+        } else if (BatteryTemp >= 20.0) {
+                // Reduce the charge current
+                pmic.setChargeVoltage(ChargeVoltageMaxLevel_warm);                   // Set charge voltage to Particle recommended voltage
+                pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
+                pmic.enableCharging();
+                chargerStatus = highCurrent;
+                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to low current. ChargeVoltage: %d", BatteryTemp, ChargeVoltageMaxLevel_warm);
         } else {
             if (chargerStatus != highCurrent) {
                 // Charge at full current
-                pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
+                pmic.setChargeVoltage(ChargeVoltageMaxLevel_cold);                   // Set charge voltage to 100%
                 pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
                 chargerStatus = highCurrent;
                 pmic.enableCharging();
-                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to max current", BatteryTemp);
+                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to low current. ChargeVoltage: %d", BatteryTemp, ChargeVoltageMaxLevel_warm);
             }
         }
     } else {
         // Mode false: Disable charger to protect the battery for night sleep
         if (chargerStatus != off) {
             // Disable charger to protect the battery
-            pmic.setChargeVoltage(4208);                   // Set charge voltage to standard 100%
+            pmic.setChargeVoltage(ChargeVoltageMaxLevel_cold);                   // Set charge voltage to 100%
             pmic.setChargeCurrent(0,0,0,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
             pmic.disableCharging();
             chargerStatus = off;
@@ -800,7 +808,7 @@ void configCharger(bool mode) {
 int setThermistorOffset(String offsetValue){
     thermistorOffset = offsetValue.toFloat();
     EEPROM.put(ThermistorOffsetAddress, thermistorOffset);
-    uint16_t validThermCalib = 0x0001;
+    uint32_t validThermCalib = 0x0001;
     EEPROM.put(validCalibAddress, validThermCalib);
     Log.info("(setThermistorOffset) Set thermistor offset to: %s, %0.3f", offsetValue, thermistorOffset);
     return 0;
@@ -809,7 +817,7 @@ int setThermistorOffset(String offsetValue){
 int setThermistorSlope(String slopeValue){
     thermistorSlope = slopeValue.toFloat();
     EEPROM.put(ThermistorSlopeAddress, thermistorSlope);
-    uint16_t validThermCalib = 0x0001;
+    uint32_t validThermCalib = 0x0001;
     EEPROM.put(validCalibAddress, validThermCalib);
     Log.info("(setThermistorSlope) Set thermistor slope to: %s, %0.3f", slopeValue, thermistorSlope);
     return 0;
@@ -829,7 +837,7 @@ int setAutoCalibFlag(String state){
     }
 }
 
-int enableNightSleep(String state) {
+int setNightSleepFlag(String state) {
     if (state == "true"){
         NightSleepFlag = true;
         Log.info("NightSleepFlag is set to: %s", state);
@@ -837,6 +845,22 @@ int enableNightSleep(String state) {
     } else if (state == "false"){
         NightSleepFlag = false;
         Log.info("NightSleepFlag is set to: %s", state);
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
+int setSoftUpdateFlag (String state) {
+    if (state == "true"){
+        SoftUpdateDisponible = true;
+        updateCounter = 12; // Stay aware of software update available for 1 hour
+        Log.info("SoftUpdateDisponible is set to: %s", state);
+        return 1;
+    } else if (state == "false"){
+        SoftUpdateDisponible = false;
+        updateCounter = 0; // Stay aware of software update available for 1 hour
+        Log.info("SoftUpdateDisponible is set to: %s", state);
         return 0;
     } else {
         return -1;
