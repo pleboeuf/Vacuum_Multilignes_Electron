@@ -51,12 +51,12 @@ SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
 // General definitions
-String FirmwareVersion = "1.0.4";             // Version of this firmware.
+String FirmwareVersion = "1.0.5";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
 String FirmwareDate = F_Date + " " + F_Time;  //compilation date and time (UTC)
-String myEventName = "Vacuum/Lignes";   // Name of the event to be sent to the cloud
+String myEventName = "Vacuum/Lignes";         // Name of the event to be sent to the cloud
 String myNameIs = "";
 String myID = "";                             // Device Id
 
@@ -80,10 +80,10 @@ String myID = "";                             // Device Id
 #define SAMPLEsINTERVAL 10UL                  // Interval of time between samples in ms
 #define VacuumPublishLimits -1                // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
 #define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
-#define StartDSTtime 1552197600               //dim 10 mar 2019, 02 h 00 = 1552197600 local time
-#define EndDSTtime 1572850800                 //dim 4 nov 2019, 02 h 00 = 1572850800 local time
-#define ChargeVoltageMaxLevel_cold 4208            //Max voltage allow by charger for cold period
-#define ChargeVoltageMaxLevel_warm 4112            //Max voltage allow by charger for warm period to prevent overcharge
+#define StartDSTtime 1583647200               //dim 08 mar 2020, 02 h 00 = 1583647200 local time
+#define EndDSTtime 1604214000                 //dim 01 nov 2020, 02 h 00 = 1572850800 local time
+#define ChargeVoltageMaxLevel_cold 4208       //Max voltage allow by charger for cold period
+#define ChargeVoltageMaxLevel_warm 4112       //Max voltage allow by charger for warm period to prevent overcharge
 
 #define BLUE_LED  D7                          // Blue led awake activity indicator
 #define maxConnectTime 900                    // Maximum allowable time for connection to the Cloud
@@ -161,14 +161,10 @@ retained int lastDay = 0;
 
 // Various variable and definitions
 retained int noSerie;                         // Le numéro de série est généré automatiquement
-// int noSerie;                               // Le numéro de série est généré automatiquement
 retained time_t newGenTimestamp = 0;
-// time_t newGenTimestamp = 0;
 retained int restartCount = 0;
-// int restartCount = 0;
 int wakeCount = 0;
 retained int FailCount = 0;
-// int FailCount = 0;
 retained int SigSystemResetCount = 0;
 
 FuelGauge fuel;
@@ -182,7 +178,7 @@ unsigned long lastSync = millis();
 char publishStr[120];
 
 /* Define a log handler on Serial1 for log messages */
-Serial1LogHandler log1Handler(115200, LOG_LEVEL_TRACE, {   // Logging level for non-application messages
+Serial1LogHandler log1Handler(115200, LOG_LEVEL_INFO, {   // Logging level for non-application messages
     { "app", LOG_LEVEL_INFO }                      // Logging level for application messages
 });
 
@@ -195,7 +191,7 @@ void setup() {
     Log.info("(setup) System version: " + System.version());
     Log.info("(setup) Firmware: " + FirmwareVersion);
     Log.info("(setup) Firmware date: " + FirmwareDate);
-    Time.zone(-4);
+    Time.zone(-5);
     pinMode(vacuum5VoltsEnablePin, OUTPUT);        // Put all control pins in output mode
     pinMode(lightSensorEnablePin, OUTPUT);
     pinMode(thermistorPowerPin, OUTPUT);
@@ -233,7 +229,7 @@ void setup() {
     EEPROM.get(validCalibAddress, thermIsCalibrated);
     if (thermIsCalibrated != 0xFFFFFFFF) {
         EEPROM.get(ThermistorOffsetAddress ,thermistorOffset);
-        Log.info("(setup) Thermistor is calibrated: %d", thermistorOffset);
+        Log.info("(setup) Thermistor is calibrated: %f", thermistorOffset);
     }
 
     if (soc > minBatteryLevel) {
@@ -255,14 +251,14 @@ void setup() {
             } else {
                 Log.warn("(setup) Failed to connect! Try again in 2 miutes");
                 restartCount++;
-                Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f\%, Vbat: %.3f", restartCount, soc, Vbat);
+                Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f, Vbat: %.3f", restartCount, soc, Vbat);
                 goToSleep(SLEEP_TWO_MINUTES);
             }
         }
     } else {
         // Sleep again for 1 hour to recharge the battery.
         restartCount++;
-        Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f\%, Vbat: %.3f", restartCount, soc, Vbat);
+        Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f, Vbat: %.3f", restartCount, soc, Vbat);
         delay(2000UL);
         goToSleep(SLEEP_LOW_BATTERY);
     }
@@ -399,7 +395,7 @@ void goToSleep(int sleepType) {
             if (dt > 360UL){
                 dt = 300UL;
             }
-            Log.info("(goToSleep) Too cold to publish. - 'SLEEP_TOO_COLD' for %d seconds.", dt);
+            Log.info("(goToSleep) Too cold to publish. - 'SLEEP_TOO_COLD' for %u seconds.", dt);
             if (Particle.connected()){
                 Particle.disconnect();
                 Cellular.disconnect();
@@ -487,7 +483,7 @@ bool publishData() {
         if (newGenTimestamp == 0 || Time.year(newGenTimestamp) > 2030) {
             newGenTimestamp = Time.now();
         }
-        String msg = makeJSON(noSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3],
+        String msg = makeJSON(noSerie, newGenTimestamp, myEventName, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3],
             ExtTemp, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality, BatteryTemp);
         Log.info("(publishData) Publishing now...");
         pubSuccess = Particle.publish(myEventName, msg, PRIVATE, NO_ACK);
@@ -666,10 +662,10 @@ float AverageReadings (int anInputPinNo, int NSamples, int interval) {
 // ***************************************************************
 // Formattage standard pour les données sous forme JSON
 // ***************************************************************
-String makeJSON(int numSerie, int timeStamp, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, int RSSI, int signalQual, float BatTemp) {
+String makeJSON(int numSerie, int timeStamp, String eName, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, int RSSI, int signalQual, float BatTemp) {
     char publishString[255];
-    sprintf(publishString,"{\"noSerie\": %d,\"generation\": %lu,\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.3f,\"soc\":%.2f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d,\"batTemp\":%.1f}",
-    numSerie, newGenTimestamp, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], ExtTemp, lightIntensityLux, Vin, soc, volt, RSSI, signalQual, BatTemp);
+    sprintf(publishString,"{\"noSerie\": %d,\"generation\": %lu,\"eName\": \"%s\",\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.3f,\"soc\":%.2f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d,\"batTemp\":%.1f}",
+    numSerie, newGenTimestamp, eName.c_str(), VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], ExtTemp, lightIntensityLux, Vin, soc, volt, RSSI, signalQual, BatTemp);
     Log.info("(makeJSON) %s", publishString);
     return publishString;
 }
@@ -891,7 +887,7 @@ int setSoftUpdateFlag (String state) {
 // VH8-10    3  Lignes H8 à H10
 // VH11-13   3  Lignes H11 à H13 RSSI = -91, qual 19
 
-String getDeviceEventName(String devId){
+void getDeviceEventName(String devId){
     // std::unordered_map<std::string, String> deviceMap;
     // deviceMap.insert({"36004f000251353337353037", "EB-Elec-Dev1"});
     // deviceMap.insert({"240051000c51343334363138", "EB-VF7-9"});
