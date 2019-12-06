@@ -3,3 +3,5 @@
 *.bin
 *.zip
 screenlog.*
+*.cpp
+target/
