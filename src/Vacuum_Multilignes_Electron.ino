@@ -51,7 +51,7 @@ SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
 // General definitions
-String FirmwareVersion = "1.0.5";             // Version of this firmware.
+String FirmwareVersion = "1.0.9";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -111,10 +111,10 @@ int VinPin = A6;
 
 float ExtTemp = 0.0;
 float BatteryTemp = 0.0;
-float minPublishTemp = -2.0;                     // Do not publish below -1
-float lowTempLimit = -15.0;                      // Reduce the wakup period from 5 min to 1 hour below this temperature
-double thermistorOffset = 0.0;
-double thermistorSlope = 0.0;
+float minPublishTemp = -2.5;                   // Do not publish below -2.5
+float lowTempLimit = -15.0;                    // Reduce the wakup period from 5 min to 1 hour below this temperature
+double thermistorOffset = 0.0;                 // 2.8
+double thermistorSlope = 1.0;                  // 1.0
 uint32_t thermIsCalibrated = 0;
 bool enableAutoCalib = false;
 
@@ -126,7 +126,7 @@ bool NightSleepFlag = false;
 
 // Light sensor parameters and variable definitions
 #define LOADRESISTOR 51000UL                  // Resistor used to convert current to voltage on the light sensor
-int lightSensorEnablePin = D0;
+int lightSensorEnablePin = D0;                // Active LOW
 int lightSensorInputPin = A5;
 float lightIntensityLux = 0;
 
@@ -178,7 +178,7 @@ unsigned long lastSync = millis();
 char publishStr[120];
 
 /* Define a log handler on Serial1 for log messages */
-Serial1LogHandler log1Handler(115200, LOG_LEVEL_INFO, {   // Logging level for non-application messages
+Serial1LogHandler log1Handler(9600, LOG_LEVEL_INFO, {   // Logging level for non-application messages
     { "app", LOG_LEVEL_INFO }                      // Logging level for application messages
 });
 
@@ -224,6 +224,7 @@ void setup() {
     Particle.variable("Version", FirmwareVersion);
     Particle.variable("Therm_Cal_Status", thermIsCalibrated);
     Particle.variable("ThermistorOffset", thermistorOffset);
+    Particle.variable("ThermistorSlope", thermistorSlope);
     Particle.variable("SoftUpdate_status", SoftUpdateDisponible);
 
     EEPROM.get(validCalibAddress, thermIsCalibrated);
@@ -319,16 +320,36 @@ void loop() {
     Log.info("(loop) Wake-up on: " + Time.timeStr() + ", WakeCount= %d", wakeCount);             // Log wakup time
 }
 
+// ***************************************************************
+// Software update flag handler
+// ***************************************************************
 void SoftUpdate_Handler(const char *event, const char *data){
     setSoftUpdateFlag("true");
 }
 
+// ***************************************************************
+// Initialize SI7051
+// ***************************************************************
 void initSI7051(){
     Wire1.begin();
     Wire1.beginTransmission(0x40);
     Wire1.write(0xE6);
     Wire1.write(0x0);
     Wire1.endTransmission();
+}
+
+// ***************************************************************
+// Disable light intensity sensor and RGB LED mirroring
+// ***************************************************************
+void setRGBmirorring(bool state){
+    if (state == true){
+        digitalWrite(lightSensorEnablePin, false);                          // Turn ON the light sensor
+        RGB.mirrorTo(B1, B0, B2, true);                                     // Enable RGB LED mirroring
+     } else {
+        digitalWrite(lightSensorEnablePin, true);
+        RGB.mirrorDisable();
+    }
+    Particle.process();
 }
 
 // ***************************************************************
@@ -344,11 +365,7 @@ void goToSleep(int sleepType) {
     Log.info("(goToSleep) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatTemp, SI7051 :\t" + timeNow +
              "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
 
-    // Disable light intensity sensor and RGB LED mirroring
-    digitalWrite(lightSensorEnablePin, true);
-    RGB.mirrorDisable();
-    Particle.process();
-
+    
     // Check if its time for night sleep
         // if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
         //     sleepType = SLEEP_All_NIGHT;
@@ -385,6 +402,7 @@ void goToSleep(int sleepType) {
                 delay (60000UL); //Stay awake for a minute to gives time for the update
             }
             Log.info("(goToSleep) 'SLEEP_NORMAL' for %lu seconds", dt);
+            setRGBmirorring(false);
             delay(2000UL);
             System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
             break;
@@ -395,12 +413,13 @@ void goToSleep(int sleepType) {
             if (dt > 360UL){
                 dt = 300UL;
             }
-            Log.info("(goToSleep) Too cold to publish. - 'SLEEP_TOO_COLD' for %u seconds.", dt);
+            Log.info("(goToSleep) Too cold to publish. - 'SLEEP_TOO_COLD' for %lu seconds.", dt);
             if (Particle.connected()){
                 Particle.disconnect();
                 Cellular.disconnect();
                 Cellular.off();
             }
+            setRGBmirorring(false);
             delay(2000UL);
             System.sleep(wakeupPin, FALLING, dt); // Low power mode
             break;
@@ -408,8 +427,9 @@ void goToSleep(int sleepType) {
         case SLEEP_LOW_BATTERY:
             // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
             dt = (ONEHOURSLEEPTIMEinMIN - Time.minute() % ONEHOURSLEEPTIMEinMIN) * 60 - Time.second() + TimeBoundaryOffset;
-            Log.info("(goToSleep) Battery below %0.1f percent. 'SLEEP_LOW_BATTERY' for %d seconds.", minBatteryLevel, dt);
+            Log.info("(goToSleep) Battery below %0.1f percent. 'SLEEP_LOW_BATTERY' for %lu seconds.", minBatteryLevel, dt);
             // Particle.disconnect();
+            setRGBmirorring(false);
             delay(2000UL);
             System.sleep(wakeupPin, FALLING, dt); // Check again in 1 hour if publish conditions are OK
             break;
@@ -417,9 +437,10 @@ void goToSleep(int sleepType) {
         case SLEEP_VERY_COLD:
             // Low battery sleep i.e. STOP Mode sleep for 1 hour to gives time to battery to recharge
             dt = (ONEHOURSLEEPTIMEinMIN - Time.minute() % ONEHOURSLEEPTIMEinMIN) * 60 - Time.second() + TimeBoundaryOffset;
-            Log.info("(goToSleep) Much too cold! - 'SLEEP_VERY_COLD' for %d seconds to protect battery.", dt);
+            Log.info("(goToSleep) Much too cold! - 'SLEEP_VERY_COLD' for %lu seconds to protect battery.", dt);
             // Particle.disconnect();
             delay(2000UL);
+            setRGBmirorring(false);
             System.sleep(wakeupPin, FALLING, dt); // Check again in 1 hour if publish conditions are OK
             break;
 
@@ -427,20 +448,21 @@ void goToSleep(int sleepType) {
             // Night sleep
             delay(2000UL);
             dt = (NightSleepTimeInMinutes - Time.minute() % NightSleepTimeInMinutes) * 60 - Time.second() + TimeBoundaryOffset;
-            Log.info("(goToSleep) It's %d O'clock. Going to 'SLEEP_All_NIGHT' for %d minutes and %d seconds.", Time.hour(), dt / 60, (dt /60)%60);
+            Log.info("(goToSleep) It's %d O'clock. Going to 'SLEEP_All_NIGHT' for %lu minutes and %lu seconds.", Time.hour(), dt / 60, (dt /60)%60);
             // Disable the charger before night sleep
             configCharger(false);
-            Log.info("(goToSleep) 'SLEEP_All_NIGHT' - Go to sleep at : %s for %d seconds", timeNow, dt);
+            Log.info("(goToSleep) 'SLEEP_All_NIGHT' - Go to sleep at : %s for %lu seconds", timeNow.c_str(), dt);
             if (dt > NIGHT_SLEEP_LENGTH_HR * 60 * 60 ){
                 dt = NIGHT_SLEEP_LENGTH_HR * 60 * 60;
             }
-            Log.info("(goToSleep) dt = %d", dt);
+            Log.info("(goToSleep) dt = %lu", dt);
             if (Particle.connected()){
                 Particle.disconnect();
                 Cellular.disconnect();
                 Cellular.off();
             }
             delay(2000UL);
+            setRGBmirorring(false);
             System.sleep(wakeupPin, FALLING, dt); // Low power mode
             break;
 
@@ -449,15 +471,15 @@ void goToSleep(int sleepType) {
             Log.info("(goToSleep) 'SLEEP_TWO_MINUTES' - Difficulty connecting to the cloud. Resetting in 2 minutes.");
             Particle.disconnect();
             delay(2000UL);
+            setRGBmirorring(false);
             System.sleep(SLEEP_MODE_DEEP, 2 * MINUTES);
             break;
     }
 
     // wake-up time
     wakeup_time = millis();
-    digitalWrite(lightSensorEnablePin, false);                          // Turn ON the light sensor
-    RGB.mirrorTo(B1, B0, B2, true);                                     // Enable RGB LED mirroring
-    for (int i=0; i<30; i++) {                                          // Gives 3 seconds to system
+    setRGBmirorring(true);                                         // Enable RGB LED mirroring
+    for (int i=0; i<30; i++) {                                     // Gives 3 seconds to system
         Particle.process();
         delay(100);
     }
@@ -525,7 +547,7 @@ float readThermistor(int NSamples, int interval, String SelectThermistor) {
             sum += battery_thermistor->readTempC(); // Read temperature and accumulate the readings
         }
     }
-    temp = (sum / NSamples) + thermistorOffset;     // Average the readings and correct the offset
+    temp = thermistorSlope * (sum / NSamples) + thermistorOffset;     // Average the readings and correct the offset
     if (SelectThermistor == "Ext") {
         Log.trace("(readThermistor) Temperature Ext. = %.1f°C", temp); // Log final value at info level
     } else {
@@ -545,7 +567,7 @@ float readSI7051(){
 
     delay(20); //14 bit temperature conversion needs 10+ms time to complete.
 
-    Wire1.requestFrom(0x40, (uint8_t)2);
+    Wire1.requestFrom(0x40, 2);
     delay(25);
     byte msb = Wire1.read();
     byte lsb = Wire1.read();
@@ -806,7 +828,7 @@ int setThermistorOffset(String offsetValue){
     EEPROM.put(ThermistorOffsetAddress, thermistorOffset);
     uint32_t validThermCalib = 0x0001;
     EEPROM.put(validCalibAddress, validThermCalib);
-    Log.info("(setThermistorOffset) Set thermistor offset to: %s, %0.3f", offsetValue, thermistorOffset);
+    Log.info("(setThermistorOffset) Set thermistor offset to: %s, %0.3f", offsetValue.c_str(), thermistorOffset);
     return 0;
 }
 
@@ -815,18 +837,18 @@ int setThermistorSlope(String slopeValue){
     EEPROM.put(ThermistorSlopeAddress, thermistorSlope);
     uint32_t validThermCalib = 0x0001;
     EEPROM.put(validCalibAddress, validThermCalib);
-    Log.info("(setThermistorSlope) Set thermistor slope to: %s, %0.3f", slopeValue, thermistorSlope);
+    Log.info("(setThermistorSlope) Set thermistor slope to: %s, %0.3f", slopeValue.c_str(), thermistorSlope);
     return 0;
 }
 
 int setAutoCalibFlag(String state){
     if (state == "true"){
         enableAutoCalib = true;
-        Log.info("enableAutoCalib is set to: %s", state);
+        Log.info("enableAutoCalib is set to: %s", state.c_str());
         return 1;
     } else if (state == "false"){
         enableAutoCalib = false;
-        Log.info("enableAutoCalib is set to: %s", state);
+        Log.info("enableAutoCalib is set to: %s", state.c_str());
         return 0;
     } else {
         return -1;
@@ -836,11 +858,11 @@ int setAutoCalibFlag(String state){
 int setNightSleepFlag(String state) {
     if (state == "true"){
         NightSleepFlag = true;
-        Log.info("NightSleepFlag is set to: %s", state);
+        Log.info("NightSleepFlag is set to: %s", state.c_str());
         return 1;
     } else if (state == "false"){
         NightSleepFlag = false;
-        Log.info("NightSleepFlag is set to: %s", state);
+        Log.info("NightSleepFlag is set to: %s", state.c_str());
         return 0;
     } else {
         return -1;
@@ -851,12 +873,12 @@ int setSoftUpdateFlag (String state) {
     if (state == "true"){
         SoftUpdateDisponible = true;
         updateCounter = 12; // Stay aware of software update available for 1 hour
-        Log.info("SoftUpdateDisponible is set to: %s", state);
+        Log.info("SoftUpdateDisponible is set to: %s", state.c_str());
         return 1;
     } else if (state == "false"){
         SoftUpdateDisponible = false;
         updateCounter = 0; // Stay aware of software update available for 1 hour
-        Log.info("SoftUpdateDisponible is set to: %s", state);
+        Log.info("SoftUpdateDisponible is set to: %s", state.c_str());
         return 0;
     } else {
         return -1;
@@ -892,12 +914,12 @@ void getDeviceEventName(String devId){
     // deviceMap.insert({"36004f000251353337353037", "EB-Elec-Dev1"});
     // deviceMap.insert({"240051000c51343334363138", "EB-VF7-9"});
     // myNameIs = deviceMap[devId];
-    if (devId == "36004f000251353337353037"){
-        myNameIs = "EB-Elec-Dev1";
-        myEventName = "test1_Vacuum/Lignes";
-    } else {
-        myEventName = "Vacuum/Lignes";
-    }
+    // if (devId == "36004f000251353337353037"){
+    //     myNameIs = "EB-Elec-Dev1";
+    //     myEventName = "test1_Vacuum/Lignes";
+    // } else {
+    //     myEventName = "Vacuum/Lignes";
+    // }
     Log.info("Device Name is: " + myNameIs);
     Log.info("Event Name is: " + myEventName);
 }
