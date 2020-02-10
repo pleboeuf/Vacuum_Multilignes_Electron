@@ -51,7 +51,7 @@ SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
 // General definitions
-String FirmwareVersion = "1.2.0";             // Version of this firmware.
+String FirmwareVersion = "1.2.1";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -500,7 +500,7 @@ bool publishData() {
         if (myEventName == "") {
             myID = System.deviceID();
             getDeviceEventName(myID);
-        }                                          // Sync time with cloud as required
+        }                                                         // Sync time with cloud as required
         checkSignal();                                            // Read cellular signal strength and quality
         if (newGenTimestamp == 0 || Time.year(newGenTimestamp) > 2030) {
             newGenTimestamp = Time.now();
@@ -828,8 +828,8 @@ int setThermistorOffset(String offsetValue){
     EEPROM.put(ThermistorOffsetAddress, thermistorOffset);
     uint32_t validThermCalib = 0x0001;
     EEPROM.put(validCalibAddress, validThermCalib);
-    EEPROM.get(validCalibAddress, thermIsCalibrated);
     Log.info("(setThermistorOffset) Set thermistor offset to: %s, %0.3f", offsetValue.c_str(), thermistorOffset);
+    ExtTemp = readThermistor(1, 1, "Ext");
     publishData();
     return 0;
 }
@@ -838,8 +838,8 @@ int setThermistorSlope(String slopeValue){
     thermistorSlope = slopeValue.toFloat();
     EEPROM.put(ThermistorSlopeAddress, thermistorSlope);
     uint32_t validThermCalib = 0x0001;
-    EEPROM.put(validCalibAddress, validThermCalib);
     Log.info("(setThermistorSlope) Set thermistor slope to: %s, %0.3f", slopeValue.c_str(), thermistorSlope);
+    ExtTemp = readThermistor(1, 1, "Ext");
     publishData();
     return 0;
 }
