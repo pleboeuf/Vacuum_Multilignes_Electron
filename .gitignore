@@ -5,3 +5,4 @@
 screenlog.*
 *.cpp
 target/
+.vscode

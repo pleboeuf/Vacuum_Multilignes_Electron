@@ -51,7 +51,7 @@ SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
 // General definitions
-String FirmwareVersion = "1.0.9";             // Version of this firmware.
+String FirmwareVersion = "1.2.0";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -111,7 +111,7 @@ int VinPin = A6;
 
 float ExtTemp = 0.0;
 float BatteryTemp = 0.0;
-float minPublishTemp = -2.5;                   // Do not publish below -2.5
+float minPublishTemp = -3.0;                   // Do not publish below -2.5
 float lowTempLimit = -15.0;                    // Reduce the wakup period from 5 min to 1 hour below this temperature
 double thermistorOffset = 0.0;                 // 2.8
 double thermistorSlope = 1.0;                  // 1.0
@@ -828,7 +828,9 @@ int setThermistorOffset(String offsetValue){
     EEPROM.put(ThermistorOffsetAddress, thermistorOffset);
     uint32_t validThermCalib = 0x0001;
     EEPROM.put(validCalibAddress, validThermCalib);
+    EEPROM.get(validCalibAddress, thermIsCalibrated);
     Log.info("(setThermistorOffset) Set thermistor offset to: %s, %0.3f", offsetValue.c_str(), thermistorOffset);
+    publishData();
     return 0;
 }
 
@@ -838,6 +840,7 @@ int setThermistorSlope(String slopeValue){
     uint32_t validThermCalib = 0x0001;
     EEPROM.put(validCalibAddress, validThermCalib);
     Log.info("(setThermistorSlope) Set thermistor slope to: %s, %0.3f", slopeValue.c_str(), thermistorSlope);
+    publishData();
     return 0;
 }
 
