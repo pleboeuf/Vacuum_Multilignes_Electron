@@ -838,6 +838,7 @@ int setThermistorSlope(String slopeValue){
     thermistorSlope = slopeValue.toFloat();
     EEPROM.put(ThermistorSlopeAddress, thermistorSlope);
     uint32_t validThermCalib = 0x0001;
+    EEPROM.put(validCalibAddress, validThermCalib);
     Log.info("(setThermistorSlope) Set thermistor slope to: %s, %0.3f", slopeValue.c_str(), thermistorSlope);
     ExtTemp = readThermistor(1, 1, "Ext");
     publishData();
