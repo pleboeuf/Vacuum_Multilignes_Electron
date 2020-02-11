@@ -51,7 +51,7 @@ SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
 // General definitions
-String FirmwareVersion = "1.2.1";             // Version of this firmware.
+String FirmwareVersion = "1.3.3";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -84,6 +84,7 @@ String myID = "";                             // Device Id
 #define EndDSTtime 1604214000                 //dim 01 nov 2020, 02 h 00 = 1572850800 local time
 #define ChargeVoltageMaxLevel_cold 4208       //Max voltage allow by charger for cold period
 #define ChargeVoltageMaxLevel_warm 4112       //Max voltage allow by charger for warm period to prevent overcharge
+#define UpdateCounterInit 4                   //Number of cycle to stay awake for software update and calibration
 
 #define BLUE_LED  D7                          // Blue led awake activity indicator
 #define maxConnectTime 900                    // Maximum allowable time for connection to the Cloud
@@ -173,7 +174,7 @@ float Vbat = 0;
 
 unsigned long lastRTCSync = millis();
 bool SoftUpdateDisponible = false;
-int updateCounter = 4;
+int updateCounter = UpdateCounterInit;
 unsigned long lastSync = millis();
 char publishStr[120];
 
@@ -365,7 +366,6 @@ void goToSleep(int sleepType) {
     Log.info("(goToSleep) Temp_Summary: Time, Li, Vin, Vbat, SOC, ExtTemp, BatTemp, SI7051 :\t" + timeNow +
              "\t%.0f\t%.3f\t%.3f\t%.2f\t%.1f\t%.1f\t%.1f", lightIntensityLux, readVin(), Vbat, soc, ExtTemp, BatteryTemp, readSI7051());
 
-    
     // Check if its time for night sleep
         // if (Time.hour() >= NIGHT_SLEEP_START_HR && Time.minute() >= NIGHT_SLEEP_START_MIN) {
         //     sleepType = SLEEP_All_NIGHT;
@@ -394,17 +394,23 @@ void goToSleep(int sleepType) {
                 dt = 300UL;
             }
             if (SoftUpdateDisponible) {
-                dt = dt - 60;
                 if (updateCounter-- <= 0){
                     SoftUpdateDisponible = false;
                 }
-                Log.info("(goToSleep) OTA available. updateCounter = %d", updateCounter);
-                delay (60000UL); //Stay awake for a minute to gives time for the update
+                Log.info("(goToSleep) OTA available, not sleeping! updateCounter = %d", updateCounter);
+                Log.info("(goToSleep) 'Waiting' for %lu seconds.", dt);
+                for (unsigned long i=0; i<(dt -2); i++) {                                     
+                    Particle.process();  // Gives time to system
+                    delay(1000UL);
+                }
+            } else {
+                Log.info("(goToSleep) 'SLEEP_NORMAL' for %lu seconds", dt);
+            // if (!SoftUpdateDisponible){
+                setRGBmirorring(false);
+                delay(2000UL);
+                System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
             }
-            Log.info("(goToSleep) 'SLEEP_NORMAL' for %lu seconds", dt);
-            setRGBmirorring(false);
-            delay(2000UL);
-            System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+            // }
             break;
 
         case SLEEP_TOO_COLD:
@@ -779,7 +785,7 @@ void configCharger(bool mode) {
             if (chargerStatus != off) {
                 // Disable charger to protect the battery
                 pmic.setChargeVoltage(ChargeVoltageMaxLevel_cold);                   // Set charge voltage to 100%
-                pmic.setChargeCurrent(0,0,0,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
+                pmic.setChargeCurrent(0,0,0,0,0,0); //Set charging current to 512mA (512 + 0 offset)
                 pmic.disableCharging();
                 chargerStatus = off;
                 Log.info("(configCharger) Battery temperature: %0.1f - Disable charger", BatteryTemp);
@@ -788,26 +794,26 @@ void configCharger(bool mode) {
             if (chargerStatus != lowCurrent) {
                 // Reduce the charge current
                 pmic.setChargeVoltage(ChargeVoltageMaxLevel_cold);                   // Set charge voltage to 100%
-                pmic.setChargeCurrent(0,0,0,0,0,1); //Set charging current to 1024mA (512 + 512 offset)
+                pmic.setChargeCurrent(0,0,0,0,0,1); //Set charging current to 576mA (512 + 64 offset)
                 pmic.enableCharging();
                 chargerStatus = lowCurrent;
                 Log.info("(configCharger) Battery temperature: %0.1f - Set charger to low current. ChargeVoltage: %d", BatteryTemp, ChargeVoltageMaxLevel_warm);
             }
         } else if (BatteryTemp >= 20.0) {
-                // Reduce the charge current
+                // Charge at full current
                 pmic.setChargeVoltage(ChargeVoltageMaxLevel_warm);                   // Set charge voltage to Particle recommended voltage
-                pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
+                pmic.setChargeCurrent(0,1,0,0,0,0); //Set charging current to 1024mA (1024 offset)
                 pmic.enableCharging();
                 chargerStatus = highCurrent;
-                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to low current. ChargeVoltage: %d", BatteryTemp, ChargeVoltageMaxLevel_warm);
+                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to high current. ChargeVoltage: %d", BatteryTemp, ChargeVoltageMaxLevel_warm);
         } else {
             if (chargerStatus != highCurrent) {
                 // Charge at full current
                 pmic.setChargeVoltage(ChargeVoltageMaxLevel_cold);                   // Set charge voltage to 100%
-                pmic.setChargeCurrent(0,0,1,0,0,0); //Set charging current to 1024mA (512 + 512 offset)
+                pmic.setChargeCurrent(0,1,0,0,0,0); //Set charging current to 1024mA (1024 + 512 offset)
                 chargerStatus = highCurrent;
                 pmic.enableCharging();
-                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to low current. ChargeVoltage: %d", BatteryTemp, ChargeVoltageMaxLevel_warm);
+                Log.info("(configCharger) Battery temperature: %0.1f - Set charger to high current. ChargeVoltage: %d", BatteryTemp, ChargeVoltageMaxLevel_warm);
             }
         }
     } else {
@@ -876,12 +882,12 @@ int setNightSleepFlag(String state) {
 int setSoftUpdateFlag (String state) {
     if (state == "true"){
         SoftUpdateDisponible = true;
-        updateCounter = 12; // Stay aware of software update available for 1 hour
+        updateCounter = UpdateCounterInit; // Stay aware of software update available for some cycle
         Log.info("SoftUpdateDisponible is set to: %s", state.c_str());
         return 1;
     } else if (state == "false"){
         SoftUpdateDisponible = false;
-        updateCounter = 0; // Stay aware of software update available for 1 hour
+        updateCounter = 0; // Do not stay aware of software update
         Log.info("SoftUpdateDisponible is set to: %s", state.c_str());
         return 0;
     } else {
