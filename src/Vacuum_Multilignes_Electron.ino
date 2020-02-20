@@ -51,7 +51,7 @@ SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
 // General definitions
-String FirmwareVersion = "1.3.3";             // Version of this firmware.
+String FirmwareVersion = "1.4.2";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -65,7 +65,7 @@ String myID = "";                             // Device Id
 #define ONEHOURinSECONDS 3600UL
 #define MINUTES 60UL                          //
 
-#define WakeCountToPublish 3                  // Number of wake-up before publishing
+#define WakeUpCountToPublish 3                  // Number of wake-up before publishing
 #define unJourEnMillis (24 * 60 * 60 * 1000)
 #define NIGHT_SLEEP_START_HR 21               // Sleep for the night beginning at 19h00
 #define NIGHT_SLEEP_START_MIN 00              // Sleep for the night beginning at 19h00
@@ -77,8 +77,8 @@ String myID = "";                             // Device Id
 #define WatchDogTimeout 480000UL              // Watch Dog Timeaout delay
 
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
-#define SAMPLEsINTERVAL 10UL                  // Interval of time between samples in ms
-#define VacuumPublishLimits -1                // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum)
+#define SAMPLEsINTERVAL 20UL                  // Interval of time between samples in ms. A value of 20ms is optimal in my tests
+#define VacuumPublishLimits -1                // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum) NOT USED
 #define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
 #define StartDSTtime 1583647200               //dim 08 mar 2020, 02 h 00 = 1583647200 local time
 #define EndDSTtime 1604214000                 //dim 01 nov 2020, 02 h 00 = 1572850800 local time
@@ -87,7 +87,7 @@ String myID = "";                             // Device Id
 #define UpdateCounterInit 4                   //Number of cycle to stay awake for software update and calibration
 
 #define BLUE_LED  D7                          // Blue led awake activity indicator
-#define maxConnectTime 900                    // Maximum allowable time for connection to the Cloud
+#define maxConnectTime 90                     // Maximum allowable time for connection to the Cloud
 
 // wakeupPin definition
 #define wakeupPin  D2
@@ -101,7 +101,7 @@ String myID = "";                             // Device Id
 #define ThermistorOffsetAddress 10            // Adresse of thermistor offset value in EEPROM
 #define ThermistorSlopeAddress  20            // Adresse of thermistor slope value in EEPROM
 
-float minBatteryLevel = 30.0;                 // Sleep unless battery is above this level
+float minBatteryLevel = 20.0;                 // Sleep unless battery is above this level
 
 Thermistor *ext_thermistor;
 Thermistor *battery_thermistor;
@@ -163,8 +163,8 @@ retained int lastDay = 0;
 // Various variable and definitions
 retained int noSerie;                         // Le numéro de série est généré automatiquement
 retained time_t newGenTimestamp = 0;
-retained int restartCount = 0;
-int wakeCount = 0;
+// retained int restartCount = 0;
+int WakeUpCount = 0;
 retained int FailCount = 0;
 retained int SigSystemResetCount = 0;
 
@@ -232,35 +232,51 @@ void setup() {
     if (thermIsCalibrated != 0xFFFFFFFF) {
         EEPROM.get(ThermistorOffsetAddress ,thermistorOffset);
         Log.info("(setup) Thermistor is calibrated: %f", thermistorOffset);
-    }
+    }    
+    connectTowerAndCloud();
+    Log.info("(setup) Setup Completed");
+}
 
+// ***************************************************************
+// Initial Connection to cellulare toer and cloud
+// ***************************************************************
+void connectTowerAndCloud(){
     if (soc > minBatteryLevel) {
-        Log.info("(setup) Connecting to tower and cloud.");
+        Log.info("(connectTowerAndCloud) Connecting to tower and cloud.");
         Particle.connect();
         if (waitFor(Particle.connected, maxConnectTime * 1000UL)) {
             Particle.process();
             if (Particle.connected()) {
-                Log.info("(setup) Cloud connected! - " + Time.timeStr());
+                Log.info("(connectTowerAndCloud) Cloud connected! - " + Time.timeStr());
                 if (not(Time.isValid())) {
-                    Log.info("(setup) Syncing time ");
+                    Log.info("(connectTowerAndCloud) Syncing time ");
                     Particle.syncTime();
                     waitUntil(Particle.syncTimeDone);
-                    Log.info("(setup) syncTimeDone " + Time.timeStr());
+                    Log.info("(connectTowerAndCloud) syncTimeDone " + Time.timeStr());
                 }
                 newGenTimestamp = Time.now();
                 SigSystemResetCount = 0;
-                Log.info("(setup) Setup Completed");
-            } else {
-                Log.warn("(setup) Failed to connect! Try again in 2 miutes");
-                restartCount++;
-                Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f, Vbat: %.3f", restartCount, soc, Vbat);
-                goToSleep(SLEEP_TWO_MINUTES);
+                return;
             }
-        }
-    } else {
-        // Sleep again for 1 hour to recharge the battery.
-        restartCount++;
-        Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f, Vbat: %.3f", restartCount, soc, Vbat);
+        } else {
+            // The connection fail after "maxConnectTime" secondes. Retray in 30 seconds   
+            Log.info("(connectTowerAndCloud) Failed to connect! Try again in 2 miutes");
+            SigSystemResetCount++;
+            Log.info("(connectTowerAndCloud) SETUP Restart. Count: %d, SOC: %.1f, Vbat: %.3f", SigSystemResetCount, soc, Vbat);
+            // Retry in 30 seconds or after 5 failures to connect, sleep for 5 minutes then try again
+            if (SigSystemResetCount > 5){
+                SigSystemResetCount = 0;
+                goToSleep(SLEEP_TWO_MINUTES);                
+            }  else {
+                Log.info("(connectTowerAndCloud) Retry to connect in 30 seconds!");
+                delay (30000UL);
+                System.reset();                    
+            }
+       }
+    } else {        
+        // The battery is too low, Sleep for 1 hour to recharge the battery.
+        SigSystemResetCount++;
+        Log.warn("(setup) SETUP Restart. Count: %d, SOC: %.1f, Vbat: %.3f", SigSystemResetCount, soc, Vbat);
         delay(2000UL);
         goToSleep(SLEEP_LOW_BATTERY);
     }
@@ -294,7 +310,7 @@ void loop() {
     // Start Publish when external temperature is above the minPublishTemp + 0.5°C then enter low power sleep mode
     } else if (ExtTemp >= minPublishTemp + 0.5) {
         vacChanged = readVacuums();
-        if (wakeCount == WakeCountToPublish || vacChanged) {
+        if ((WakeUpCount == WakeUpCountToPublish) || vacChanged) {
             publishData();
         }
         goToSleep(SLEEP_NORMAL);
@@ -303,7 +319,7 @@ void loop() {
         if (Particle.connected()) {
             // Keep Publishing when close to minPublishTemp if the connection was already established
             vacChanged = readVacuums();                                   // Then VacuumPublishLimits
-            if (wakeCount == WakeCountToPublish || vacChanged) {
+            if ((WakeUpCount == WakeUpCountToPublish) || vacChanged) {
                 publishData();                                            // Publish a message the data
             }
             goToSleep(SLEEP_NORMAL);
@@ -313,12 +329,12 @@ void loop() {
         }
     }
 
-    wakeCount++;
-    if (wakeCount > WakeCountToPublish) {
-        wakeCount = 0;
+    WakeUpCount++;
+    if (WakeUpCount > WakeUpCountToPublish) {
+        WakeUpCount = 0;
     }
     Log.info(" ");
-    Log.info("(loop) Wake-up on: " + Time.timeStr() + ", WakeCount= %d", wakeCount);             // Log wakup time
+    Log.info("(loop) Wake-up on: " + Time.timeStr() + ", WakeUpCount= %d", WakeUpCount);             // Log wakup time
 }
 
 // ***************************************************************
@@ -515,7 +531,7 @@ bool publishData() {
             ExtTemp, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality, BatteryTemp);
         Log.info("(publishData) Publishing now...");
         pubSuccess = Particle.publish(myEventName, msg, PRIVATE, NO_ACK);
-        for (int i=0; i<100; i++) { // Gives 10 seconds to send the data
+        for (int i=0; i<150; i++) { // Gives 15 seconds to send the data
             Particle.process();
             delay(100);
         }
@@ -761,9 +777,9 @@ void syncCloudTime() {
                 lastDay = Time.day();
                 Log.info("(syncCloudTime) Sync time completed");
             } else {
-                Log.warn("(syncCloudTime) Failed to connect! Try again in 5 miutes");
-                restartCount++;
-                Log.warn("(syncCloudTime) SETUP Restart. Count: %d, battery: %.1f", restartCount, fuel.getSoC());
+                Log.warn("(syncCloudTime) Failed to connect! Try again in 2 miutes");
+                SigSystemResetCount++;
+                Log.warn("(syncCloudTime) SETUP Restart. Count: %d, battery: %.1f", SigSystemResetCount, fuel.getSoC());
                 goToSleep(SLEEP_TWO_MINUTES);
             }
         }
@@ -809,7 +825,7 @@ void configCharger(bool mode) {
         } else {
             if (chargerStatus != highCurrent) {
                 // Charge at full current
-                pmic.setChargeVoltage(ChargeVoltageMaxLevel_cold);                   // Set charge voltage to 100%
+                pmic.setChargeVoltage(ChargeVoltageMaxLevel_warm);                   // Set charge voltage to 100%
                 pmic.setChargeCurrent(0,1,0,0,0,0); //Set charging current to 1024mA (1024 + 512 offset)
                 chargerStatus = highCurrent;
                 pmic.enableCharging();
