@@ -51,7 +51,7 @@ SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
 // General definitions
-String FirmwareVersion = "1.4.2";             // Version of this firmware.
+String FirmwareVersion = "1.5.0";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -148,8 +148,8 @@ static float VacuumInHg[] = {0, 0, 0, 0};         // Vacuum scaled data array
 static float PrevVacuumInHg[] = {10, 0, 0, 0};     // Vacuum reading at the preceding iteration
 
 // Cellular signal and data variables definitions
-int signalRSSI;
-int signalQuality;
+float signalRSSI;
+float signalQuality;
 int txPrec   = 0;                             // Previous tx data count
 int rxPrec   = 0;                             // Previous rx data count
 int deltaTx  = 0;                             // Difference tx data count
@@ -162,7 +162,7 @@ retained int lastDay = 0;
 
 // Various variable and definitions
 retained int noSerie;                         // Le numéro de série est généré automatiquement
-retained time_t newGenTimestamp = 0;
+retained int newGenTimestamp = 0;
 // retained int restartCount = 0;
 int WakeUpCount = 0;
 retained int FailCount = 0;
@@ -524,9 +524,11 @@ bool publishData() {
             getDeviceEventName(myID);
         }                                                         // Sync time with cloud as required
         checkSignal();                                            // Read cellular signal strength and quality
+        Log.info("(publishData) CheckSignal completed Ok!");
         if (newGenTimestamp == 0 || Time.year(newGenTimestamp) > 2030) {
             newGenTimestamp = Time.now();
         }
+        Log.info("(publishData) Prepare the publish -> makeJSON");
         String msg = makeJSON(noSerie, newGenTimestamp, myEventName, VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3],
             ExtTemp, lightIntensityLux, readVin(), fuel.getSoC(), fuel.getVCell(), signalRSSI, signalQuality, BatteryTemp);
         Log.info("(publishData) Publishing now...");
@@ -706,10 +708,10 @@ float AverageReadings (int anInputPinNo, int NSamples, int interval) {
 // ***************************************************************
 // Formattage standard pour les données sous forme JSON
 // ***************************************************************
-String makeJSON(int numSerie, int timeStamp, String eName, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, int RSSI, int signalQual, float BatTemp) {
+String makeJSON(int numSerie, int timeStamp, String eName, float va, float vb, float vc, float vd, float temp, float li, float Vin, float soc, float volt, float RSSI, float signalQual, float BatTemp) {
     char publishString[255];
-    sprintf(publishString,"{\"noSerie\": %d,\"generation\": %lu,\"eName\": \"%s\",\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.3f,\"soc\":%.2f,\"volt\":%.3f,\"rssi\":%d,\"qual\":%d,\"batTemp\":%.1f}",
-    numSerie, newGenTimestamp, eName.c_str(), VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], ExtTemp, lightIntensityLux, Vin, soc, volt, RSSI, signalQual, BatTemp);
+    sprintf(publishString,"{\"noSerie\": %d,\"generation\": %d,\"eName\": \"%s\",\"va\":%.1f,\"vb\":%.1f,\"vc\":%.1f,\"vd\":%.1f,\"temp\":%.1f,\"li\":%.0f,\"Vin\":%.3f,\"soc\":%.2f,\"volt\":%.3f,\"rssi\":%.0f,\"qual\":%.0f,\"batTemp\":%.1f}",
+                                numSerie, newGenTimestamp, eName.c_str(), VacuumInHg[0], VacuumInHg[1], VacuumInHg[2], VacuumInHg[3], ExtTemp, lightIntensityLux, Vin, soc, volt, RSSI, signalQual, BatTemp);
     Log.info("(makeJSON) %s", publishString);
     return publishString;
 }
@@ -737,10 +739,13 @@ void readCellularData(String s, bool prtFlag) {
 // ***************************************************************
 bool checkSignal() {
     CellularSignal sig = Cellular.RSSI();
-    signalRSSI = sig.rssi;
-    signalQuality = sig.qual;
+    // signalRSSI = sig.rssi;
+    signalRSSI = sig.getStrengthValue();
+
+    // signalQuality = sig.qual;
+    signalQuality = sig.getQualityValue();
     // String s = "RSSI.QUALITY: \t" + String(signalRSSI) + "\t" + String(signalQuality) + "\t";
-    if (sig.rssi == 0 || sig.qual == 0){
+    if (signalRSSI == 0 || signalQuality == 0){
         Log.info("(checkSignal) NETWORK CONNECTION LOST!!");
         delay(2000UL);
         if (SigSystemResetCount <= 3){
@@ -748,14 +753,14 @@ bool checkSignal() {
             System.reset();
         }
         return false;
-    } else if (sig.rssi == 1){
+    } else if (signalRSSI == 1){
         Log.info("(checkSignal) Cellular module or time-out error");
         return false;
-    } else if (sig.rssi == 2){
+    }else if (signalRSSI == 2){
         Log.info("(checkSignal) RSSI value is not known, not detectable or currently not available");
         return false;
     } else {
-        Log.info("(checkSignal) Read the cellular signal!");
+        Log.info("(checkSignal) Read the cellular signal!, %.0f, %.0f", signalRSSI, signalQuality);
         return true;
     }
 }
