@@ -48,10 +48,10 @@ Sleep duration: See #define SLEEPTIMEinMINUTES
 #include "photon-thermistor.h"
 
 SYSTEM_MODE(MANUAL);
-// SYSTEM_THREAD(ENABLED);
+SYSTEM_THREAD(ENABLED);
 
 // General definitions
-String FirmwareVersion = "1.5.0";             // Version of this firmware.
+String FirmwareVersion = "1.5.3";             // Version of this firmware.
 String thisDevice = "";
 String F_Date  = __DATE__;
 String F_Time = __TIME__;
@@ -79,12 +79,12 @@ String myID = "";                             // Device Id
 #define NUMSAMPLES 5                          // Number of readings to average to reduce the noise
 #define SAMPLEsINTERVAL 20UL                  // Interval of time between samples in ms. A value of 20ms is optimal in my tests
 #define VacuumPublishLimits -1                // Minimum vacuum required to permit publish( 1 always publish, -1: publish only if vacuum) NOT USED
-#define VacMinChange 1                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
-#define StartDSTtime 1583647200               //dim 08 mar 2020, 02 h 00 = 1583647200 local time
-#define EndDSTtime 1604214000                 //dim 01 nov 2020, 02 h 00 = 1572850800 local time
-#define ChargeVoltageMaxLevel_cold 4208       //Max voltage allow by charger for cold period
-#define ChargeVoltageMaxLevel_warm 4112       //Max voltage allow by charger for warm period to prevent overcharge
-#define UpdateCounterInit 4                   //Number of cycle to stay awake for software update and calibration
+#define VacMinChange 2                        // Minimum changes in vacuum to initiate a publish within SLEEPTIMEinMINUTES
+#define StartDSTtime 1647154801               // dim 15 mar 2022, 02 h 00 = 1647154800 local time
+#define EndDSTtime 1667718000                 // dim 06 nov 2022, 02 h 00 = 1667718000 local time
+#define ChargeVoltageMaxLevel_cold 4208       // Max voltage allow by charger for cold period
+#define ChargeVoltageMaxLevel_warm 4112       // Max voltage allow by charger for warm period to prevent overcharge
+#define UpdateCounterInit 4                   // Number of cycle to stay awake for software update and calibration
 
 #define BLUE_LED  D7                          // Blue led awake activity indicator
 #define maxConnectTime 90                     // Maximum allowable time for connection to the Cloud
@@ -424,7 +424,14 @@ void goToSleep(int sleepType) {
             // if (!SoftUpdateDisponible){
                 setRGBmirorring(false);
                 delay(2000UL);
-                System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+                // System.sleep(wakeupPin, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+                System.sleep(D4, FALLING, dt, SLEEP_NETWORK_STANDBY); // Press wakup BUTTON to awake
+                // SystemSleepConfiguration config;
+                // config.mode(SystemSleepMode::STOP)
+                //     .gpio(D2, RISING)
+                //     .duration(dt)
+                //     .network(NETWORK_INTERFACE_CELLULAR, SystemSleepNetworkFlag::INACTIVE_STANDBY);
+                // SystemSleepResult result = System.sleep(config);
             }
             // }
             break;
