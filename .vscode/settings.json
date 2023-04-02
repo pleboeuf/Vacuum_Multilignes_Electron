@@ -1,5 +1,5 @@
 {
-  "particle.targetPlatform": "electron",
-  "particle.firmwareVersion": "3.3.1",
-  "particle.targetDevice": "VF7-9"
+    "particle.targetPlatform": "electron",
+    "particle.firmwareVersion": "1.4.4",
+    "particle.targetDevice": "VD1ABVD2AB"
 }
